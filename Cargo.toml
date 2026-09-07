@@ -1,0 +1,11 @@
+[package]
+name = "econsim"
+version = "0.1.0"
+edition = "2021"
+description = "Headless agent-based economy simulator - proof of concept (milestones M0/M1)"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+debug = 1

@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Econsim Government</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s1-fill: rgba(42,120,214,0.10);
+  --good: #006300; --critical: #d03b3b; --warn: #b45309;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s1-fill: rgba(57,135,229,0.14);
+    --good: #0ca30c; --critical: #e66767; --warn: #f59e0b;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 var(--sans); }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 12px 20px; border-bottom: 1px solid var(--axis); background: var(--surface); position: sticky; top: 0; z-index: 2; }
+header h1 { font-size: 17px; font-weight: 600; margin: 0 8px 0 0; }
+.clock { font-family: var(--mono); font-size: 14px; }
+.clock b { font-weight: 500; }
+.controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+button { font: 500 13px var(--sans); color: var(--ink-2); background: var(--surface); border: 1px solid var(--ring); border-radius: 4px; padding: 5px 10px; cursor: pointer; }
+button:hover { color: var(--ink); border-color: var(--axis); }
+button[aria-pressed="true"] { color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink-2); border-color: var(--ink-2); }
+button.primary { background: var(--s1); color: #fff; border-color: transparent; }
+button:disabled { opacity: 0.5; cursor: default; }
+.poll { display: flex; gap: 8px; margin-left: auto; font-family: var(--mono); font-size: 12.5px; }
+.poll span { padding: 3px 8px; border-radius: 4px; border: 1px solid var(--ring); }
+.poll span.you { border-color: var(--s1); color: var(--s1); }
+.wrap { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 16px 20px 40px; max-width: 1500px; margin: 0 auto; }
+@media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
+.panel { background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 14px 16px; }
+.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 10px; font-weight: 500; }
+.lock { border: 1px solid var(--warn); color: var(--warn); border-radius: 4px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px; }
+.lever { display: grid; grid-template-columns: 1fr 64px; gap: 2px 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.lever:last-of-type { border-bottom: 0; }
+.lever label { font-size: 13px; }
+.lever .val { font-family: var(--mono); font-size: 12.5px; text-align: right; color: var(--ink-2); }
+.lever input[type=range] { grid-column: 1 / span 2; width: 100%; accent-color: var(--s1); }
+.lever.changed label { color: var(--s1); }
+.lever .hint { grid-column: 1 / span 2; font-size: 11.5px; color: var(--muted); }
+.actions { display: flex; gap: 8px; margin-top: 12px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 10px 12px; }
+.tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.tile .value { font-size: 22px; font-weight: 500; line-height: 1.2; }
+.tile .value small { font-size: 12px; font-weight: 400; color: var(--ink-2); margin-left: 3px; }
+.tile .sub { font-size: 12px; color: var(--ink-2); }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.chart { background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 10px 12px 6px; min-width: 0; }
+.chart .head { display: flex; justify-content: space-between; font-size: 13px; }
+.chart .head b { font-weight: 600; }
+.chart .head span { color: var(--muted); font-size: 12px; }
+.chart svg { display: block; width: 100%; height: 150px; overflow: visible; }
+.gridline { stroke: var(--grid); }
+.tick { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+.line { fill: none; stroke-width: 2; stroke-linejoin: round; }
+.area { fill: var(--s1-fill); }
+.marker { stroke: var(--ink-2); stroke-dasharray: 3 3; opacity: 0.6; }
+.legend { font-size: 11.5px; color: var(--ink-2); display: flex; gap: 12px; }
+.legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.events { margin-top: 14px; font-family: var(--mono); font-size: 12px; line-height: 1.6; max-height: 320px; overflow: auto; }
+.events div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.events .k { display: inline-block; min-width: 76px; color: var(--muted); }
+.events .k.election, .events .k.player { color: var(--s1); }
+.events .k.bankrupt, .events .k.default, .events .k.treasury { color: var(--critical); }
+.events .k.entry { color: var(--good); }
+.events .k.money { color: var(--warn); }
+.events .k.city { color: var(--s3); }
+.cityhead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 10px; }
+.palette { display: flex; gap: 6px; flex-wrap: wrap; }
+.palette button i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.citystats { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-2); display: flex; gap: 14px; flex-wrap: wrap; }
+.citywrap { position: relative; overflow-x: auto; }
+.citywrap canvas { display: block; border: 1px solid var(--ring); border-radius: 4px; cursor: crosshair; max-width: 100%; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--axis); border-radius: 4px; padding: 6px 9px; font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.pos { height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--s1), var(--grid) 50%, var(--s2)); position: relative; margin: 8px 0 4px; }
+.pos i { position: absolute; top: -4px; width: 4px; height: 16px; background: var(--ink); border-radius: 2px; transform: translateX(-2px); }
+.pos i.mean { background: var(--muted); }
+.poslabel { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Econsim Government</h1>
+  <div class="clock" id="clock">connecting…</div>
+  <div class="controls" id="controls">
+    <button data-ctl="pause">⏸ Pause</button>
+    <button data-step="1">step day</button>
+    <button data-step="28">step month</button>
+    <button data-speed="1">1 day/s</button>
+    <button data-speed="7">1 week/s</button>
+    <button data-speed="28">1 month/s</button>
+    <button data-speed="336">1 year/s</button>
+    <button data-speed="max">max</button>
+  </div>
+  <div class="poll" id="poll"></div>
+</header>
+
+<div class="wrap">
+  <aside>
+    <div class="panel">
+      <h2>Your levers</h2>
+      <div id="lock" class="lock" hidden></div>
+      <div id="levers"></div>
+      <div class="actions">
+        <button class="primary" id="apply">Apply</button>
+        <button id="revert">Revert</button>
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button id="print" title="mint 2% of the money supply into the treasury at month end">Print 2% of money</button>
+        <button id="burn" title="destroy 2% of the money supply from the treasury at month end, as far as the treasury can">Burn 2%</button>
+      </div>
+      <div class="pos"><i id="pos-you" title="your bundle"></i><i class="mean" id="pos-mean" title="mean voter"></i></div>
+      <div class="poslabel"><span>market</span><span id="poslabel-mid"></span><span>redistribution</span></div>
+    </div>
+    <div class="panel" style="margin-top:12px">
+      <h2>Events</h2>
+      <div class="events" id="events"></div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="tiles" id="tiles"></div>
+    <div class="panel" style="margin-bottom:14px">
+      <div class="cityhead">
+        <h2 style="margin:0">City</h2>
+        <div class="palette" id="palette"></div>
+        <div class="citystats" id="citystats"></div>
+      </div>
+      <div class="citywrap"><canvas id="city" width="672" height="448"></canvas><div class="tip" id="citytip" hidden></div></div>
+    </div>
+    <div class="charts" id="charts"></div>
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const fmtInt = n => Math.round(n).toLocaleString('en-US');
+const fmtCents = c => '$' + (c/100).toLocaleString('en-US', {maximumFractionDigits: 0});
+const pct = x => (x*100).toFixed(1) + '%';
+
+const LEVERS = [
+  ['income-tax', 'Income tax', 0, 0.6, 0.01, v=>pct(v), 'withheld from every pay packet'],
+  ['sales-tax', 'Sales tax', 0, 0.3, 0.01, v=>pct(v), 'on food, shelter and luxury'],
+  ['luxury-tax', 'Luxury tax', 0, 1.0, 0.01, v=>pct(v), 'extra on the luxury good'],
+  ['dividend-tax', 'Dividend tax', 0, 0.8, 0.01, v=>pct(v), 'withheld when firms pay shareholders'],
+  ['inheritance-tax', 'Inheritance tax', 0, 0.9, 0.01, v=>pct(v), 'on cash estates'],
+  ['benefit', 'Unemployment benefit', 0, 1.0, 0.01, v=>pct(v), 'weekly, as a share of the average wage; also floors what the jobless will accept'],
+  ['basic-income', 'Basic income', 0, 0.4, 0.01, v=>pct(v), 'weekly to every adult, share of the average wage'],
+  ['pension', 'Pension', 0, 1.0, 0.01, v=>pct(v), 'weekly to everyone 65 and over'],
+  ['child-benefit', 'Child benefit', 0, 0.3, 0.01, v=>pct(v), 'weekly per child to the parents'],
+  ['min-wage', 'Minimum wage', 0, 4000, 50, v=>fmtInt(v)+'¢/wk', 'floor on weekly pay; low-skill work disappears above its worth'],
+  ['class-size', 'Public school class size', 0, 45, 1, v=>v==0?'no public school':v+' per teacher', 'target pupils per teacher; smaller classes cost more teachers'],
+  ['teacher-pay', 'Teacher pay', 0.6, 1.6, 0.05, v=>v.toFixed(2)+'× avg wage', 'public teachers need skill 1.0 or better'],
+  ['surplus-dividend', 'Surplus returned', 0, 1.0, 0.05, v=>pct(v), 'share of treasury above one month of spending handed back equally'],
+  ['policy-rate', 'Policy interest rate', -0.01, 0.30, 0.005, v=>v<0?'auto (Taylor rule)':pct(v), 'drag to the left end for the Taylor rule; sets loan, bond and deposit pricing, and how fast idle cash is spent'],
+  ['print-rate', 'Money printing', 0, 0.05, 0.001, v=>(v*100).toFixed(1)+'% / month', 'new money minted into the treasury each month, as a share of all money'],
+  ['ground-rent', 'Ground rent', 0, 0.05, 0.001, v=>(v*100).toFixed(1)+'% of land value / month', 'paid to the treasury by every housed home (firms pay double)'],
+];
+const CHARTS = [
+  {k:'unemployment', title:'Unemployment', unit:'% of working age', scale:100, fmt:v=>v.toFixed(1)+'%', area:true, zero:true},
+  {k:'cpi', title:'Consumer prices', unit:'index, start = 100', fmt:v=>v.toFixed(1)},
+  {k:'approval', title:'Your standing', unit:'% who would vote Government', scale:100, fmt:v=>v.toFixed(1)+'%', zero:true, max:100, xkey:'approval'},
+  {k:'gini', title:'Inequality', unit:'Gini of home cash', fmt:v=>v.toFixed(3), zero:true, max:1},
+  {k:'debt', title:'Public debt and treasury', unit:'dollars', scale:0.01, fmt:v=>'$'+fmtInt(v), zero:true, second:{k:'treasury', name:'treasury'}, name:'debt'},
+  {k:'taxes', title:'Taxes and transfers', unit:'dollars per month', scale:0.01, fmt:v=>'$'+fmtInt(v), zero:true, second:{k:'transfers', name:'transfers + schools'}, name:'taxes'},
+  {k:'real_wage', title:'Real wage', unit:'weekly pay ÷ prices', fmt:v=>v.toFixed(2), zero:true},
+  {k:'population', title:'Population', unit:'people alive', fmt:v=>fmtInt(v), zero:true},
+  {k:'money', title:'Money in circulation', unit:'dollars', scale:0.01, fmt:v=>'$'+fmtInt(v), zero:true},
+  {k:'inflation', title:'Inflation', unit:'CPI, 12-month change', scale:100, fmt:v=>v.toFixed(1)+'%', area:true},
+  {k:'policy_rate', title:'Interest rates', unit:'% per year', scale:100, fmt:v=>v.toFixed(1)+'%', zero:true, second:{k:'loan_rate', name:'loans to firms'}, name:'policy rate'},
+  {k:'printed', title:'Money printed', unit:'dollars per month (negative = burned)', scale:0.01, fmt:v=>'$'+fmtInt(v)},
+  {k:'homes', title:'Homes and housing', unit:'homes vs residential room', fmt:v=>fmtInt(v), zero:true, second:{k:'housing_capacity', name:'room'}, name:'homes'},
+  {k:'avg_land_value', title:'Land value', unit:'dollars, city average per tile', scale:0.01, fmt:v=>'$'+fmtInt(v), zero:true},
+  {k:'rent_revenue', title:'Ground rent collected', unit:'dollars per month', scale:0.01, fmt:v=>'$'+fmtInt(v), zero:true},
+];
+
+let S = null, draft = {}, dirty = new Set();
+const ZONES = [['empty','Demolish','#00000000'],['residential','Residential','#2a78d6'],['business','Business','#eb6834'],['school','School','#1baf7a'],['park','Park','#7cb342']];
+let tool = 1;
+const TILE = 28;
+
+function buildLevers() {
+  $('#levers').innerHTML = LEVERS.map(([k, name, lo, hi, step, fmt, hint]) =>
+    `<div class="lever" data-k="${k}"><label>${name}</label><span class="val" id="val-${k}"></span>
+     <input type="range" min="${lo}" max="${hi}" step="${step}" id="in-${k}"><span class="hint">${hint}</span></div>`).join('');
+  for (const [k,,,,, fmt] of LEVERS) {
+    const el = $(`#in-${k}`);
+    el.addEventListener('input', () => { draft[k] = +el.value; dirty.add(k); $(`#val-${k}`).textContent = fmt(+el.value); el.closest('.lever').classList.add('changed'); });
+  }
+  $('#apply').addEventListener('click', async () => {
+    if (!dirty.size) return;
+    const body = [...dirty].map(k => `${k}=${k === 'policy-rate' && draft[k] < 0 ? -1 : draft[k]}`).join('&');
+    await fetch('/policy', {method:'POST', body});
+    dirty.clear();
+    document.querySelectorAll('.lever.changed').forEach(e => e.classList.remove('changed'));
+  });
+  $('#revert').addEventListener('click', () => { dirty.clear(); syncLevers(true); });
+  $('#print').addEventListener('click', () => S && fetch('/policy', {method:'POST', body:`print=${Math.round(S.now.money*0.02)}`}));
+  $('#burn').addEventListener('click', () => S && fetch('/policy', {method:'POST', body:`print=${-Math.round(S.now.money*0.02)}`}));
+}
+
+function syncLevers(force) {
+  if (!S) return;
+  const p = S.player_policy;
+  for (const [k,,,,, fmt] of LEVERS) {
+    if (dirty.has(k) && !force) continue;
+    let v = p[k];
+    if (k === 'policy-rate' && v < 0) v = -0.01;
+    draft[k] = v;
+    const el = $(`#in-${k}`); el.value = v;
+    $(`#val-${k}`).textContent = fmt(v);
+    el.closest('.lever').classList.remove('changed');
+  }
+  const locked = !S.player_in_power;
+  const lock = $('#lock');
+  lock.hidden = !locked;
+  if (locked) lock.textContent = `${S.incumbent} won the last election and governs until year ${Math.floor(S.locked_until/12)}. Your bundle below is your platform for the next election.`;
+  $('#pos-you').style.left = (S.player_policy.position*100)+'%';
+  $('#pos-mean').style.left = (S.mean_pref*100)+'%';
+  $('#poslabel-mid').textContent = `you ${S.player_policy.position.toFixed(2)} · voters ${S.mean_pref.toFixed(2)}`;
+}
+
+function renderHeader() {
+  const y = S.year + 1, m = S.month + 1, d = (S.day % 28) || 28;
+  const sp = S.paused ? 'paused' : (S.speed === 'max' ? 'max speed' : `${S.speed} days/s`);
+  $('#clock').innerHTML = `Year <b>${y}</b> · month <b>${m}</b> · day <b>${d}</b> &nbsp; <span style="color:var(--muted)">${sp}</span>`;
+  document.querySelectorAll('#controls button').forEach(b => {
+    const on = (b.dataset.ctl === 'pause' && S.paused) || (!S.paused && b.dataset.speed && (b.dataset.speed === String(S.speed)));
+    b.setAttribute('aria-pressed', on);
+  });
+  const P = S.poll;
+  $('#poll').innerHTML = `<span class="you">You ${pct(P.Government)}</span>` + ['Market','Centre','Labour'].map(n => `<span>${n} ${pct(P[n])}</span>`).join('') +
+    `<span title="who governs">${S.player_in_power ? 'in office' : S.incumbent + ' governs'} · ${S.elections} elections</span>`;
+}
+
+function renderTiles() {
+  const n = S.now;
+  const t = [
+    ['Unemployment', pct(n.unemployment), '', `${fmtInt(n.employed)} employed`],
+    ['Inflation', n.inflation == null ? '–' : pct(n.inflation), '', `CPI ${(n.cpi||0).toFixed(1)}`],
+    ['Inequality', n.gini == null ? '–' : n.gini.toFixed(3), 'Gini', `top 10% hold ${n.top10==null?'–':pct(n.top10)}`],
+    ['Treasury', fmtCents(n.treasury||0), '', `debt ${fmtCents(n.debt||0)} at ${n.bond_rate==null?'–':pct(n.bond_rate)}`],
+    ['Real wage', n.real_wage==null?'–':n.real_wage.toFixed(1), 'units/wk', `avg pay ${fmtInt(n.wage||0)}¢`],
+    ['People', fmtInt(n.population||0), '', `${fmtInt(n.homes||0)} homes · ${fmtInt(n.minors||0)} children · ${fmtInt(n.retirees||0)} retired`],
+    ['Schools', fmtInt((n.pupils_public||0)+(n.pupils_private||0)), 'pupils', `public quality ${(n.public_quality||0).toFixed(2)} · ${fmtInt(n.pupils_private||0)} private`],
+    ['Money & credit', fmtCents(n.money||0), '', `loans ${fmtCents(n.loans||0)} · printed so far ${fmtCents(n.printed_total||0)}`],
+    ['Interest', n.policy_rate==null?'–':pct(n.policy_rate), S.policy['policy-rate'] < 0 ? 'auto' : 'set by you', `loans ${n.loan_rate==null?'–':pct(n.loan_rate)} · bonds ${n.bond_rate==null?'–':pct(n.bond_rate)}`],
+    ['Firms', fmtInt(n.firms||0), '', `market cap ${fmtCents(n.market_cap||0)}`],
+  ];
+  $('#tiles').innerHTML = t.map(([l,v,u,s]) => `<div class="tile"><div class="label">${l}</div><div class="value">${v}${u?`<small>${u}</small>`:''}</div><div class="sub">${s}</div></div>`).join('');
+}
+
+function niceTicks(lo, hi, n) {
+  const span = hi - lo || 1, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1,2,2.5,5,10].map(m=>m*mag).find(s => span/s <= n+0.5) || 10*mag;
+  const out = []; for (let v = Math.floor(lo/step)*step; v <= hi + step*0.5; v += step) out.push(+v.toFixed(10)); return out;
+}
+function chartSvg(sp, el) {
+  const xs = S.series.month.map(m => m/12);
+  const ys = (S.series[sp.k] || []).map(v => v * (sp.scale||1));
+  const ys2 = sp.second ? S.series[sp.second.k].map(v => v * (sp.scale||1)) : null;
+  const n = Math.min(xs.length, ys.length);
+  if (n < 2) return '<text class="tick" x="10" y="20">waiting for the first month…</text>';
+  const W = el.clientWidth - 24 || 300, H = 150, L = 46, R = 10, T = 8, B = 20, iw = W-L-R, ih = H-T-B;
+  let all = ys.slice(0,n).concat(ys2 ? ys2.slice(0,n) : []);
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (sp.zero) lo = Math.min(0, lo); if (sp.max != null) hi = Math.max(hi, sp.max); if (hi === lo) hi = lo + 1;
+  const ticks = niceTicks(lo, hi, 3); lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length-1]);
+  const x0 = xs[0], x1 = Math.max(xs[n-1], x0 + 1);
+  const sx = t => L + (t-x0)/(x1-x0)*iw, sy = v => T + (1-(v-lo)/(hi-lo))*ih;
+  let g = '';
+  for (const tk of ticks) g += `<line class="gridline" x1="${L}" x2="${L+iw}" y1="${sy(tk)}" y2="${sy(tk)}"/><text class="tick" x="${L-6}" y="${sy(tk)+4}" text-anchor="end">${sp.fmt(tk).replace(/\.\d+%$/, m=>m)}</text>`;
+  const span = x1-x0, step = span > 30 ? 10 : span > 12 ? 5 : span > 6 ? 2 : 1;
+  for (let y = Math.ceil(x0); y <= x1; y += step) g += `<text class="tick" x="${sx(y)}" y="${H-6}" text-anchor="middle">yr ${y}</text>`;
+  const path = (arr, c) => { const d = arr.slice(0,n).map((v,i)=>(i?'L':'M')+sx(xs[i]).toFixed(1)+' '+sy(v).toFixed(1)).join(' '); return `<path class="line" d="${d}" stroke="${c}"/>`; };
+  if (sp.area) { const d = ys.slice(0,n).map((v,i)=>(i?'L':'M')+sx(xs[i]).toFixed(1)+' '+sy(v).toFixed(1)).join(' '); g += `<path class="area" d="${d} L${sx(xs[n-1])} ${sy(lo)} L${sx(xs[0])} ${sy(lo)} Z"/>`; }
+  for (const e of S.events) if (e.kind === 'election' && e.day > 0) { const x = sx(e.day/336); if (x >= L && x <= L+iw) g += `<line class="marker" x1="${x}" x2="${x}" y1="${T}" y2="${T+ih}"/>`; }
+  g += path(ys, 'var(--s1)'); if (ys2) g += path(ys2, 'var(--s2)');
+  return g;
+}
+function renderCharts() {
+  const root = $('#charts');
+  if (!root.children.length) root.innerHTML = CHARTS.map(sp => `<div class="chart" data-k="${sp.k}"><div class="head"><b>${sp.title}</b><span>${sp.unit}</span></div>${sp.second?`<div class="legend"><span><i style="background:var(--s1)"></i>${sp.name}</span><span><i style="background:var(--s2)"></i>${sp.second.name}</span></div>`:''}<svg></svg></div>`).join('');
+  for (const sp of CHARTS) {
+    const el = root.querySelector(`[data-k="${sp.k}"]`); const svg = el.querySelector('svg');
+    const W = el.clientWidth - 24 || 300; svg.setAttribute('viewBox', `0 0 ${W} 150`);
+    svg.innerHTML = chartSvg(sp, el);
+  }
+}
+function buildCity() {
+  $('#palette').innerHTML = ZONES.map(([k,name,c],z) => `<button data-zone="${z}" aria-pressed="${z===tool}"><i style="background:${z?c:'transparent'};border:1px solid var(--axis)"></i>${name}${z?` <span style="color:var(--muted)">$${fmtInt((S?S.city.costs[z]:0)/100)}</span>`:''}</button>`).join('');
+  document.querySelectorAll('#palette button').forEach(b => b.addEventListener('click', () => { tool = +b.dataset.zone; document.querySelectorAll('#palette button').forEach(x => x.setAttribute('aria-pressed', x === b)); }));
+  const cv = $('#city');
+  cv.addEventListener('click', e => {
+    if (!S) return;
+    const r = cv.getBoundingClientRect(); const sx = cv.width / r.width;
+    const x = Math.floor((e.clientX - r.left) * sx / TILE), y = Math.floor((e.clientY - r.top) * sx / TILE);
+    if (x < 0 || y < 0 || x >= S.city.w || y >= S.city.h) return;
+    fetch('/policy', {method:'POST', body:`build=${x},${y},${tool}`});
+  });
+  cv.addEventListener('mousemove', e => {
+    if (!S) return;
+    const r = cv.getBoundingClientRect(); const sx = cv.width / r.width;
+    const x = Math.floor((e.clientX - r.left) * sx / TILE), y = Math.floor((e.clientY - r.top) * sx / TILE);
+    const tip = $('#citytip');
+    if (x < 0 || y < 0 || x >= S.city.w || y >= S.city.h) { tip.hidden = true; return; }
+    const [z, occ, lv] = S.city.tiles[y*S.city.w + x];
+    const cap = S.city.capacity[z];
+    tip.hidden = false;
+    tip.innerHTML = `(${x},${y}) ${ZONES[z][1].toLowerCase()}${cap?` · ${occ}/${cap} ${z===1?'homes':z===2?'firms':'pupils'}`:''} · land ${fmtCents(lv)}`;
+    tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 260) + 'px'; tip.style.top = (e.clientY - r.top + 14) + 'px';
+  });
+  cv.addEventListener('mouseleave', () => $('#citytip').hidden = true);
+}
+function renderCity() {
+  const c = S.city, cv = $('#city');
+  if (cv.width !== c.w*TILE) { cv.width = c.w*TILE; cv.height = c.h*TILE; }
+  const ctx = cv.getContext('2d');
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  ctx.fillStyle = dark ? '#111110' : '#f1f0ea'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const lvs = c.tiles.map(t => t[2]); const lmin = Math.min(...lvs), lmax = Math.max(...lvs);
+  for (let y = 0; y < c.h; y++) for (let x = 0; x < c.w; x++) {
+    const [z, occ, lv] = c.tiles[y*c.w + x];
+    const px = x*TILE, py = y*TILE;
+    if (z === 0) {
+      const t = (lv - lmin) / (lmax - lmin + 1);
+      ctx.fillStyle = dark ? `rgba(255,255,255,${0.03 + 0.12*t})` : `rgba(11,11,11,${0.02 + 0.10*t})`;
+      ctx.fillRect(px+1, py+1, TILE-2, TILE-2);
+      continue;
+    }
+    const cap = c.capacity[z]; const fill = cap ? occ / cap : 1;
+    ctx.fillStyle = ZONES[z][2]; ctx.globalAlpha = 0.25 + 0.65 * Math.min(1, fill);
+    ctx.fillRect(px+1, py+1, TILE-2, TILE-2);
+    ctx.globalAlpha = 1;
+    if (cap) { ctx.fillStyle = dark ? '#fff' : '#0b0b0b'; ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono'); ctx.textAlign = 'center'; ctx.fillText(z === 3 ? 'S' : String(occ), px + TILE/2, py + TILE/2 + 4); }
+    if (z === 4) { ctx.fillStyle = dark ? '#fff' : '#0b0b0b'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('♣', px + TILE/2, py + TILE/2 + 4); }
+  }
+  const n = S.now;
+  $('#citystats').innerHTML = [
+    `homes ${fmtInt(n.homes_housed||0)}/${fmtInt(n.housing_capacity||0)} housed`,
+    `<span style="color:${(n.unhoused||0)>0?'var(--critical)':'inherit'}">${fmtInt(n.unhoused||0)} unhoused</span>`,
+    `firms ${fmtInt(n.business_used||0)}/${fmtInt(n.business_slots||0)} lots`,
+    `school room ${fmtInt(n.school_capacity||0)} for ${fmtInt((n.pupils_public||0))} pupils`,
+    `land ${fmtCents(n.avg_land_value||0)} avg · rent ${fmtCents(n.rent_revenue||0)}/mo · commute ${(n.avg_commute||0).toFixed(1)} tiles`,
+  ].map(x => `<span>${x}</span>`).join('');
+  document.querySelectorAll('#palette button').forEach(b => { const z = +b.dataset.zone; const span = b.querySelector('span'); if (span) span.textContent = '$' + fmtInt(S.city.costs[z]/100); });
+}
+function renderEvents() {
+  $('#events').innerHTML = S.events.map(e => `<div title="${e.msg.replace(/"/g,'&quot;')}"><span class="k ${e.kind}">${e.kind}</span> <span class="k">yr ${Math.floor(e.day/336)+1}</span> ${e.msg}</div>`).join('');
+}
+
+document.querentered = false;
+document.querySelectorAll('#controls button').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.ctl) fetch('/control', {method:'POST', body:`action=${b.dataset.ctl}`});
+  else if (b.dataset.speed) fetch('/control', {method:'POST', body:`action=speed&value=${b.dataset.speed}`});
+  else if (b.dataset.step) fetch('/control', {method:'POST', body:`action=step&value=${b.dataset.step}`});
+}));
+
+async function poll() {
+  try {
+    const r = await fetch('/state'); const j = await r.json();
+    if (!j.loading) { S = j; renderHeader(); renderTiles(); syncLevers(false); renderCity(); renderCharts(); renderEvents(); }
+  } catch (e) { $('#clock').textContent = 'simulator not reachable'; }
+  setTimeout(poll, 500);
+}
+buildLevers(); buildCity(); poll();
+window.addEventListener('resize', () => S && renderCharts());
+</script>
+</body>
+</html>
