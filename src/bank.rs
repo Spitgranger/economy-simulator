@@ -5,6 +5,7 @@
 
 use crate::ledger::Account;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Bank {
     pub account: Account,
     pub target_equity: i64,

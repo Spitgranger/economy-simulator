@@ -29,6 +29,7 @@ pub const MONTHS_PER_YEAR: u32 = 12;
 pub const DAYS_PER_YEAR: u32 = DAYS_PER_MONTH * MONTHS_PER_YEAR;
 
 #[derive(Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Config {
     pub seed: u64,
     pub days: u32,
@@ -93,6 +94,7 @@ struct SectorSignal {
     unmet_ratio: f64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct World {
     pub cfg: Config,
     pub day: u32,
@@ -103,6 +105,9 @@ pub struct World {
     pub gov: Government,
     pub bank: Bank,
     pub city: City,
+    pub construction: Vec<crate::construction::ConstructionProject>,
+    pub(crate) construction_labor: Vec<f64>,
+    pub(crate) physical_goods: crate::physical::PhysicalGoodsBalance,
 
     rng_hh: Rng,
     rng_firm: Rng,
@@ -319,6 +324,9 @@ impl World {
             gov,
             bank,
             city,
+            construction: Vec::new(),
+            construction_labor: Vec::new(),
+            physical_goods: crate::physical::PhysicalGoodsBalance::default(),
             rng_hh,
             rng_firm,
             rng_goods,
@@ -409,11 +417,13 @@ impl World {
     /// Advance one day. Public so an interactive driver can pace the world.
     pub fn tick_day(&mut self) {
         self.day += 1;
+        self.physical_goods = crate::physical::PhysicalGoodsBalance::begin(&self.firms, self.day);
         self.day_units = [0; NG];
         self.day_revenue = [0; NG];
         self.day_unmet = 0;
         self.day_output = 0;
 
+        self.construction_day();
         self.produce();
         self.consume();
         if self.day % DAYS_PER_WEEK == 0 {
@@ -427,6 +437,12 @@ impl World {
         }
         self.record_day();
         self.ledger.assert_conserved(self.day);
+        self.physical_goods.finish(&self.firms);
+    }
+
+    /// Producer stock and explained unit flows for the last completed day.
+    pub fn physical_goods_balance(&self) -> &crate::physical::PhysicalGoodsBalance {
+        &self.physical_goods
     }
 
     // ------------------------------------------------------------------ helpers
@@ -495,10 +511,11 @@ impl World {
             if self.firms.is_school(f) {
                 continue;
             }
-            let carry = self.firms.production_carry[f] + self.firms.effective_labor[f] * self.firms.productivity[f];
+            let carry = self.firms.production_carry[f] + (self.firms.effective_labor[f] - self.construction_labor.get(f).copied().unwrap_or(0.0)).max(0.0) * self.firms.productivity[f];
             let units = carry.floor();
             self.firms.production_carry[f] = carry - units;
             self.firms.inventory[f] += units as i64;
+            self.physical_goods.produced[self.firms.good[f] as usize] += units as i128;
             self.day_output += units as i64;
         }
     }
@@ -526,7 +543,7 @@ impl World {
                 let mut sum = 0i64;
                 let mut cnt = 0i64;
                 for &f in &self.homes.known[h][g] {
-                    if f == NO_KNOWN || !self.firms.active[f as usize] {
+                    if f == NO_KNOWN || !self.firms.active[f as usize] || self.firms.good[f as usize] as usize != g {
                         continue;
                     }
                     sum += self.gov.gross_price(g, self.firms.price[f as usize]).0;
@@ -570,7 +587,7 @@ impl World {
                         continue;
                     }
                     let fu = f as usize;
-                    if self.firms.active[fu] && self.firms.inventory[fu] > 0 {
+                    if self.firms.active[fu] && self.firms.good[fu] as usize == g && self.firms.inventory[fu] > 0 {
                         let (gross, tax) = self.gov.gross_price(g, self.firms.price[fu]);
                         opts[n_opts] = (f, gross, tax);
                         n_opts += 1;
@@ -609,6 +626,7 @@ impl World {
                         }
                         cash -= buy * gross;
                         self.firms.inventory[fi] -= buy;
+                        self.physical_goods.household_consumption[g] += buy as i128;
                         self.firms.sales_month[fi] += buy;
                         self.firms.revenue_month[fi] += net;
                         desired -= buy;
@@ -624,7 +642,7 @@ impl World {
                     w.swap(j, remaining);
                 }
                 if desired > 0 && n_opts == 0 {
-                    if let Some(&f) = self.homes.known[h][g].iter().find(|&&f| f != NO_KNOWN && self.firms.active[f as usize]) {
+                    if let Some(&f) = self.homes.known[h][g].iter().find(|&&f| f != NO_KNOWN && self.firms.active[f as usize] && self.firms.good[f as usize] as usize == g) {
                         self.firms.lost_sales_month[f as usize] += desired;
                     }
                 }
@@ -949,6 +967,9 @@ impl World {
                 self.firms.wage_rate[f], self.firms.inventory[f], reason
             ),
         );
+        if !self.firms.is_school(f) {
+            self.physical_goods.closure_losses[self.firms.good[f] as usize] += self.firms.inventory[f] as i128;
+        }
         self.firms.deactivate(f);
     }
 
@@ -1185,7 +1206,9 @@ impl World {
             for g in 0..NG {
                 for k in 0..K {
                     let f = known[g][k];
-                    if f == NO_KNOWN || !self.firms.active[f as usize] {
+                    // A closed firm's slot can now belong to another sector.
+                    if f == NO_KNOWN || !self.firms.active[f as usize] || self.firms.good[f as usize] as usize != g {
+                        known[g][k] = NO_KNOWN;
                         if let Some(r) = Self::random_firm_of(&mut self.rng_hh, &self.firms, g) {
                             if !known[g].contains(&r) {
                                 known[g][k] = r;
@@ -1271,30 +1294,9 @@ impl World {
         // builds ordered since last month
         let builds = std::mem::take(&mut self.gov.pending_builds);
         for (x, y, z) in builds {
-            let zone = Zone::from_u8(z);
-            if x >= self.city.w || y >= self.city.h {
-                continue;
+            if let Err(reason) = self.start_construction(x, y, Zone::from_u8(z)) {
+                self.events.log(self.day, "construction", &format!("order at ({x},{y}) rejected: {reason}"));
             }
-            let t = self.city.idx(x, y);
-            let current = self.city.tiles[t as usize].zone;
-            if zone == current {
-                continue;
-            }
-            if current != Zone::Empty && self.city.tiles[t as usize].occupants > 0 {
-                self.events.log(self.day, "city", &format!("cannot demolish ({},{}): {} in use", x, y, current.name()));
-                continue;
-            }
-            let cost = zone.cost();
-            if self.ledger.balance(self.gov.account) < cost {
-                self.events.log(self.day, "city", &format!("cannot afford {} at ({},{}): {} cents", zone.name(), x, y, cost));
-                continue;
-            }
-            self.city.set(x, y, zone);
-            if cost > 0 {
-                self.pay_builders(cost);
-                self.city.built_month += cost;
-            }
-            self.events.log(self.day, "city", &format!("{} built at ({},{}) for {} cents", zone.name(), x, y, cost));
         }
         if let Some(s) = self.public_school {
             if self.firms.tile[s] == NO_TILE || self.city.tiles[self.firms.tile[s] as usize].zone != Zone::School {
@@ -1352,34 +1354,6 @@ impl World {
             }
         }
         self.month_commute_sum = if n > 0 { d_sum / n as f64 } else { 0.0 };
-    }
-
-    /// Construction spending goes to the building trade: the shelter sector, or
-    /// luxury firms if there is none, or equally to homes if there are no firms.
-    fn pay_builders(&mut self, cost: i64) {
-        let mut builders: Vec<usize> = self.firms.active_list.iter().map(|&f| f as usize).filter(|&f| self.firms.good[f] as usize == SHELTER).collect();
-        if builders.is_empty() {
-            builders = self.firms.active_list.iter().map(|&f| f as usize).filter(|&f| self.firms.good[f] as usize == LUXURY).collect();
-        }
-        if builders.is_empty() {
-            let homes: Vec<usize> = (0..self.homes.n).filter(|&h| self.homes.has_adults(h)).collect();
-            let per = cost / homes.len().max(1) as i64;
-            for &h in &homes {
-                if per > 0 {
-                    self.ledger.transfer(self.gov.account, self.homes.account[h], per, self.day);
-                    self.homes.income_month[h] += per;
-                }
-            }
-            return;
-        }
-        let per = cost / builders.len() as i64;
-        for &f in &builders {
-            if per > 0 {
-                self.ledger.transfer(self.gov.account, self.firms.account[f], per, self.day);
-                self.firms.revenue_month[f] += per;
-                self.firms.sales_month[f] += per / self.firms.price[f].max(1);
-            }
-        }
     }
 
     /// Treasury above the reserve is returned equally to every adult (into their home).
@@ -1858,5 +1832,103 @@ impl World {
         self.month_immigrants = 0;
         self.month_hc_sum = 0.0;
         self.month_tuition = 0;
+    }
+}
+
+#[cfg(test)]
+mod construction_production_tests {
+    use super::*;
+    #[test]
+    fn construction_work_reduces_daily_factory_output() {
+        let mut cfg = Config::default();
+        cfg.n_hh = 40;
+        cfg.n_firms = 10;
+        cfg.out_dir = format!("/tmp/econsim-construction-output-{}", std::process::id());
+        let mut w = World::new(cfg).unwrap();
+        w.ledger.mint(w.gov.account, 1_000_000);
+        for &f in &w.firms.active_list {
+            let f = f as usize;
+            w.firms.inventory[f] = 1000;
+            w.firms.effective_labor[f] = 8.0;
+            w.firms.production_carry[f] = 0.0;
+        }
+        w.start_construction(0, 0, Zone::Residential).unwrap();
+        w.construction_day();
+        let before = w.firms.inventory.clone();
+        assert!(w.construction_labor.iter().sum::<f64>() > 0.0);
+        w.produce();
+        for &f in &w.firms.active_list {
+            let f = f as usize;
+            if w.firms.is_school(f) { continue; }
+            let expected = ((8.0 - w.construction_labor[f]) * w.firms.productivity[f]).floor() as i64;
+            assert_eq!(w.firms.inventory[f] - before[f], expected);
+        }
+    }
+
+    #[test]
+    fn physical_closure_loss_survives_slot_reuse_in_another_sector() {
+        let mut cfg = Config::default();
+        cfg.n_hh = 40;
+        cfg.n_firms = 10;
+        cfg.quiet = true;
+        cfg.out_dir = format!("/tmp/econsim-physical-closure-{}", std::process::id());
+        let out = cfg.out_dir.clone();
+        let mut w = World::new(cfg).unwrap();
+        let f = w.firms.active_list.iter().map(|&f| f as usize)
+            .find(|&f| w.firms.good[f] as usize == FOOD).unwrap();
+        w.firms.inventory[f] = 73;
+        w.physical_goods = crate::physical::PhysicalGoodsBalance::begin(&w.firms, 1);
+        w.close_firm(f, "exit", "physical accounting test");
+        let reused = w.firms.activate(0, SHELTER, 1.0, 1, 1, 1, 0.0, 1).unwrap();
+        assert_eq!(reused, f);
+        assert_eq!(w.firms.inventory[f], 0);
+        w.physical_goods.finish(&w.firms);
+        assert_eq!(w.physical_goods.closure_losses[FOOD], 73);
+        assert_eq!(w.physical_goods.closure_losses[SHELTER], 0);
+        w.ledger.assert_conserved(1);
+        drop(w);
+        std::fs::remove_dir_all(out).unwrap();
+    }
+
+    #[test]
+    fn stale_shopping_link_cannot_sell_a_reused_firms_new_good() {
+        let mut cfg = Config::default();
+        cfg.n_hh = 40;
+        cfg.n_firms = 10;
+        cfg.quiet = true;
+        cfg.out_dir = format!("/tmp/econsim-stale-shopping-{}", std::process::id());
+        let out = cfg.out_dir.clone();
+        let mut w = World::new(cfg).unwrap();
+        let f = w.firms.active_list.iter().map(|&f| f as usize)
+            .find(|&f| w.firms.good[f] as usize == FOOD).unwrap();
+        w.close_firm(f, "exit", "shopping network regression");
+        assert_eq!(w.firms.activate(0, SHELTER, 1.0, 1, 1, 1, 0.0, 1), Some(f));
+        w.firms.inventory[f] = 1000;
+        for h in 0..w.homes.n {
+            w.homes.known[h] = [[NO_KNOWN; K]; NG];
+            w.homes.known[h][FOOD][0] = f as u32;
+            w.ledger.mint(w.homes.account[h], 100_000);
+        }
+        w.physical_goods = crate::physical::PhysicalGoodsBalance::begin(&w.firms, 1);
+        w.consume();
+        assert_eq!(w.firms.inventory[f], 1000, "shelter cannot satisfy a food order");
+        assert_eq!(w.firms.sales_month[f], 0);
+        assert_eq!(w.firms.lost_sales_month[f], 0, "food shortages are not shelter demand");
+        assert!(w.day_unmet > 0);
+        w.physical_goods.finish(&w.firms);
+        w.household_monthly();
+        for h in 0..w.homes.n {
+            if !w.homes.has_adults(h) { continue; }
+            for g in 0..NG {
+                for &supplier in &w.homes.known[h][g] {
+                    if supplier != NO_KNOWN {
+                        assert!(w.firms.active[supplier as usize]);
+                        assert_eq!(w.firms.good[supplier as usize] as usize, g);
+                    }
+                }
+            }
+        }
+        drop(w);
+        std::fs::remove_dir_all(out).unwrap();
     }
 }

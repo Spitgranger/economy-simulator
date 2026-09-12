@@ -12,6 +12,7 @@ pub const RETIRE_AGE: u32 = 65 * 12;
 pub const SCHOOL_START: u32 = 6 * 12;
 
 #[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct PersonInit {
     pub age_months: u32,
     pub parent: u32,
@@ -30,6 +31,7 @@ pub struct PersonInit {
     pub pref: f64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct People {
     pub n: usize,
     pub alive: Vec<bool>,

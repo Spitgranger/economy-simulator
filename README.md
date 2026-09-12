@@ -3,7 +3,7 @@
 A city simulator in which the whole economy is agent-based: people act on
 drives and personality, found and run firms, and a government legislates by
 moving the same levers agents already respond to. This repository is at the
-**headless proof-of-concept** stage. Done so far: M0 (price stability, money
+**economy prototype with an optional native 3D city view** stage. Done so far: M0 (price stability, money
 conservation), M1 (three goods, heterogeneous firms, entry and bankruptcy),
 M2 (labor skills, skill-based pay, structural unemployment), M4 (a government
 with taxes, transfers and a minimum wage as levers, chosen by elections
@@ -12,24 +12,61 @@ and buying government bonds, a bond market, a stock market) and M6 (people
 live in one- or two-adult homes, have children who go to public or private
 schools staffed by teachers hired on the labor market, come of age with a
 skill shaped by that schooling and by their parents, partner and separate,
-retire, die and leave estates). M3 space is the missing rung.
+retire, die and leave estates). M3 space includes zoning, capacity, land values, commuting, and resource-constrained construction.
 
-    econsim/           Rust crate, zero dependencies
+    econsim/           shared Rust engine, persistence, optional native graphics
     tools/dashboard.py builds a chart dashboard (HTML) from a run's CSV output
-    DESIGN.md          design decisions, milestone ladder, findings so far
+    DESIGN.md          economic model and historical findings
+    DIRECTION.md       proposed government/resource-planning game direction
+    IMPLEMENTATION_PLAN.md  delivery milestones and current implementation status
 
-## Play it
+## Native 3D desktop
+
+From the repository root:
+
+```sh
+cd econsim
+cargo run --release --features desktop -- desktop
+```
+
+This opens a native graphics window and runs the Rust economy directly, without
+an HTTP server or browser. The optional Macroquad renderer draws a perspective
+city with occupancy-dependent building heights, windows, schools, and trees.
+It needs a working desktop graphics driver; the first build downloads Cargo
+dependencies. Headless and browser builds do not enable the graphics feature.
+
+- Right-drag to orbit, scroll to zoom, WASD to pan, Home to reset the camera.
+- Select homes, businesses, schools, parks, or demolition and click a lot.
+  Preview outlines turn red for occupied lots or insufficient funds.
+- Orders reserve a budget at month end, then become multi-day projects.
+  Use **Month +** (N) while paused, then advance time to perform construction.
+- Space pauses/resumes; choose 1, 7, or 28 simulation days per second.
+- Hover over a lot to inspect occupancy, land value, or construction progress,
+  delivered materials, spending, and the reason work is stalled.
+- **X** over a site cancels its queued order or active project. Cancellation
+  refunds unspent escrow; purchased materials and completed work are sunk costs.
+- **F5 / Save** writes a resumable game; **F9 / Load** restores it and pauses.
+  Escape saves and exits. Default save: `out/city.econsave`; use `--save FILE`
+  to choose another path. Native loads write logs into fresh `resume-N` folders.
+
+The simulation still uses discrete lots, and the detailed policy sliders, charts,
+and election dashboard remain in the browser interface. Roads/freight, electricity,
+and terrain editing remain future milestones. New-game command-line policy
+options also work in native mode.
+For the graphics API, see [Macroquad's 3D examples](https://macroquad.rs/examples/).
+
+## Play in the browser
 
     cd econsim
     cargo run --release -- play             # opens the game in a browser window
 
-Or install a launcher on Linux with `desktop/install.sh`, after which Econsim
-appears in the application menu. `play` starts the simulator and opens the
+Install the native 3D launcher on Linux with `desktop/install.sh`, after which
+Econsim appears in the application menu. For the browser interface, `play` starts the simulator and opens the
 page as an app window in Chromium or Chrome if present, else Firefox, else
 the default browser; `serve` does the same without opening anything (visit
-http://127.0.0.1:8080). The engine and the interface are dependency-free
-Rust plus one HTML page, so this is the whole desktop stack: no Electron, no
-webview toolchain to build.
+http://127.0.0.1:8080). The browser client uses a local Rust HTTP server and one
+HTML page. All clients share the engine library; serde/bincode provide snapshot
+persistence and native graphics are an optional dependency.
 
 You are the government and the city planner. The page shows the economy live with a clock, nine
 stat tiles, charts, an event feed and a poll; the left panel has every lever
@@ -39,8 +76,20 @@ central bank's interest rate, a money-printing rate and the ground rent, plus
 one-off print and burn buttons). Apply changes at any time.
 
 The city is a 24 x 16 grid. Pick a tool (residential, business, school,
-park, demolish) and click a tile; the cost leaves the treasury at month end
-and goes to the building trade. Homes need residential room (20 per tile),
+park, demolish) and click a tile. At month end, affordable orders reserve their
+budgets in escrow and clear their sites. Construction then buys finite inventory
+and hires a share of existing building-trade labor, reducing ordinary production.
+Projects take at least four construction days; buildings provide no capacity
+until complete. Material, labor, and budget shortages delay progress. Unspent
+escrow returns to the treasury on completion or cancellation. The browser shows
+project progress, cancellation buttons, command feedback, and a **Save game** button.
+Demolishing an unoccupied lot still completes at month end without construction.
+
+For this first resource-planning slice, building materials use existing shelter
+inventory; dedicated material goods and durable housing services are the next
+modeling step. Exhausted project budgets require cancellation and replanning.
+
+Homes need residential room (20 per tile),
 firms need business lots (6 per tile), pupils need school room (250 per
 tile). Newcomers arrive while there is housing and work; a full city means
 unhoused homes and blocked founders. Land value follows occupancy and what is
@@ -53,6 +102,31 @@ their own real income; lose, and the winner governs for a term while your
 sliders become your platform for the next election. `serve` accepts the same
 options as a headless run (`--seed`, `--households`, `--no-credit`, ...) plus
 `--port`. The world is written to `out/` once a year as in headless mode.
+
+## Save and resume
+
+From `econsim/`:
+
+```sh
+cargo run --release -- --days 336 --out out --save out/city.econsave
+cargo run --release -- --load out/city.econsave --days 28 --out continued
+cargo run --release --features desktop -- desktop --load out/city.econsave --out desktop-resumed
+```
+
+`--out` on load must be a **new directory with an existing parent**. This keeps
+previous run outputs intact. A loaded headless run advances the requested number
+of **additional** days (or years); saved simulation settings are restored, while
+`--out`, duration, and `--quiet` are taken from the command line. `--save FILE`
+writes after a headless run or selects the native/browser Save destination.
+Use the browser Save button before stopping its server; it does not autosave on
+Ctrl-C. Resume a browser game with `serve --load FILE --out NEW_DIRECTORY`.
+
+Saves include RNG streams, policy schedules, construction progress and escrow,
+pending commands, agents, financial state, and statistical history. Their version
+and checksum are validated; CSV/event files in the new directory contain the
+continuation, while monthly history and the cumulative output hash are preserved.
+Snapshot format 2 includes the daily physical goods report. Version 1 saves are
+rejected; there is no backward-version migration support.
 
 ## Run it headless
 
@@ -131,6 +205,12 @@ Output in the `--out` directory:
   a transfer that panics on overdraft. After every daily tick the sum of all
   balances is asserted equal to minted minus burned, and monthly the bond
   books are asserted consistent (bonds held equals debt equals issue faces).
+- **Producer goods reconcile daily.** Opening stock plus production equals
+  closing stock plus household consumption, construction allocation, and stock
+  discarded when firms close. The assertion runs in release builds; the engine's
+  `physical_goods_balance()` report records each flow for the last completed day.
+  Education seats and completed buildings are outside this unit accounting.
+  Construction materials count as irreversibly allocated when delivered.
 - **Deterministic.** Five independent xoshiro256** streams (households, firms,
   goods market, labor market, entry) seeded from one seed. `--replay-check`
   runs the world twice and compares a hash of all daily output.

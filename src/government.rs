@@ -8,6 +8,7 @@ use crate::goods::{LUXURY, NG};
 use crate::ledger::Account;
 
 #[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Policy {
     pub income_tax: f64,
     pub sales_tax: [f64; NG],
@@ -121,6 +122,7 @@ impl Policy {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Government {
     pub account: Account,
     pub policy: Policy,

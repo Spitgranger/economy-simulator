@@ -11,6 +11,7 @@ pub const SHARES: u32 = 10_000;
 /// Seller id used in the ask book when the firm itself is selling new shares.
 pub const FIRM_SELLER: u32 = u32::MAX - 1;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Firms {
     pub active: Vec<bool>,
     pub account: Vec<Account>,

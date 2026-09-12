@@ -1,20 +1,8 @@
-mod bank;
-mod city;
-mod demographics;
-mod education;
-mod finance;
-mod firms;
-mod goods;
-mod government;
-mod homes;
-mod ledger;
-mod people;
-mod politics;
-mod rng;
+#[cfg(feature = "desktop")]
+mod desktop;
 mod server;
-mod sim;
-mod stats;
 
+use econsim::{city, commands, goods, government, politics, sim, stats};
 use sim::{Config, World, DAYS_PER_YEAR, MONTHS_PER_YEAR};
 
 fn usage() -> ! {
@@ -24,6 +12,9 @@ fn usage() -> ! {
 USAGE: econsim [options]            run headless, write CSVs and logs
        econsim play [options]       desktop mode: start the game and open it in a browser window
        econsim serve [options]      same, without opening a browser (http://127.0.0.1:8080)
+       econsim desktop [options]    native 3D city (build with --features desktop)
+  --load FILE         restore a saved world; --out must name a fresh directory
+  --save FILE         save after headless run, or on native exit / browser save
   --no-browser        with play: do not launch a browser
   --port N            port for serve (default 8080)
   --seed N            PRNG seed (default 42)
@@ -78,7 +69,10 @@ Politics and finance:
 /// Open the UI as an application window in whatever browser the desktop has.
 fn open_browser(url: &str) {
     let attempts: Vec<(&str, Vec<String>)> = if cfg!(target_os = "windows") {
-        vec![("cmd", vec!["/C".into(), "start".into(), "".into(), url.to_string()])]
+        vec![(
+            "cmd",
+            vec!["/C".into(), "start".into(), "".into(), url.to_string()],
+        )]
     } else if cfg!(target_os = "macos") {
         vec![("open", vec![url.to_string()])]
     } else {
@@ -144,7 +138,10 @@ fn parse_args(args: &[String]) -> (Config, bool, u16) {
             "--no-stock-market" => cfg.stock_trading = false,
             "--no-demographics" => cfg.demographics = false,
             "--bank-equity" => cfg.bank_equity = num(val(&mut i)) as i64,
-            "--income-tax" | "--sales-tax" | "--luxury-tax" | "--dividend-tax" | "--benefit" | "--basic-income" | "--pension" | "--child-benefit" | "--inheritance-tax" | "--class-size" | "--teacher-pay" | "--min-wage" | "--surplus-dividend" | "--policy-rate" | "--print-rate" | "--ground-rent" => {
+            "--income-tax" | "--sales-tax" | "--luxury-tax" | "--dividend-tax" | "--benefit"
+            | "--basic-income" | "--pension" | "--child-benefit" | "--inheritance-tax"
+            | "--class-size" | "--teacher-pay" | "--min-wage" | "--surplus-dividend"
+            | "--policy-rate" | "--print-rate" | "--ground-rent" => {
                 let v = val(&mut i);
                 if let Err(e) = cfg.policy.set(&a[2..], &v) {
                     eprintln!("{}", e);
@@ -161,7 +158,8 @@ fn parse_args(args: &[String]) -> (Config, bool, u16) {
                     eprintln!("{}", e);
                     usage();
                 }
-                cfg.schedule.push((year * MONTHS_PER_YEAR, k.to_string(), v.to_string()));
+                cfg.schedule
+                    .push((year * MONTHS_PER_YEAR, k.to_string(), v.to_string()));
             }
             _ => usage(),
         }
@@ -174,11 +172,73 @@ fn parse_args(args: &[String]) -> (Config, bool, u16) {
     (cfg, replay, port)
 }
 
+/// Persistence options are client concerns, not simulation configuration.
+fn persistence_args(args: Vec<String>) -> (Vec<String>, Option<String>, Option<String>) {
+    let mut filtered = Vec::new();
+    let mut load = None;
+    let mut save = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--load" => load = Some(args.next().unwrap_or_else(|| usage())),
+            "--save" => save = Some(args.next().unwrap_or_else(|| usage())),
+            _ => filtered.push(arg),
+        }
+    }
+    (filtered, load, save)
+}
+
+fn open_world(cfg: Config, load: Option<&str>, interactive: bool) -> std::io::Result<World> {
+    if let Some(path) = load {
+        let mut world = World::load(path, &cfg.out_dir)?;
+        if !interactive {
+            world.day.checked_add(cfg.days).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "requested duration exceeds simulation clock",
+                )
+            })?;
+        }
+        // World::run consumes a duration, not an absolute end date.
+        world.cfg.days = cfg.days;
+        world.cfg.quiet = cfg.quiet;
+        return Ok(world);
+    }
+    World::new(cfg)
+}
+
 fn main() -> std::io::Result<()> {
-    let all: Vec<String> = std::env::args().skip(1).collect();
+    let (all, load, save) = persistence_args(std::env::args().skip(1).collect());
     let mode = all.first().map(|s| s.as_str());
+    let interactive = matches!(mode, Some("desktop" | "serve" | "play"));
+    let (mut cfg, replay, port) = parse_args(if interactive { &all[1..] } else { &all });
+    if interactive {
+        cfg.quiet = true;
+        cfg.days = u32::MAX;
+        if load.is_none() {
+            if cfg.policy == government::Policy::default() {
+                cfg.policy = politics::platform(0.5, cfg.init_wage as f64);
+            }
+            if cfg.first_election_year == 1 {
+                cfg.first_election_year = cfg.election_every_years;
+            }
+        }
+    }
+    if mode == Some("desktop") {
+        #[cfg(feature = "desktop")]
+        {
+            let world = open_world(cfg, load.as_deref(), true)?;
+            macroquad::Window::from_config(desktop::window_config(), desktop::run(world, save));
+            return Ok(());
+        }
+        #[cfg(not(feature = "desktop"))]
+        {
+            eprintln!("Native graphics require: cargo run --release --features desktop -- desktop");
+            std::process::exit(2);
+        }
+    }
     if mode == Some("serve") || mode == Some("play") {
-        let (mut cfg, _, port) = parse_args(&all[1..]);
+        let world = open_world(cfg, load.as_deref(), true)?;
         if mode == Some("play") && !all.iter().any(|a| a == "--no-browser") {
             let url = format!("http://127.0.0.1:{}/", port);
             std::thread::spawn(move || {
@@ -186,31 +246,42 @@ fn main() -> std::io::Result<()> {
                 open_browser(&url);
             });
         }
-        cfg.quiet = true;
-        cfg.days = u32::MAX;
-        // the player starts with a centrist bundle and a full term before the first election
-        if cfg.policy == government::Policy::default() {
-            cfg.policy = politics::platform(0.5, cfg.init_wage as f64);
-        }
-        if cfg.first_election_year == 1 {
-            cfg.first_election_year = cfg.election_every_years;
-        }
-        return server::serve(cfg, port);
+        return server::serve(world, port, save);
     }
-    let (cfg, replay, _) = parse_args(&all);
     let t0 = std::time::Instant::now();
-    let mut world = World::new(cfg.clone())?;
+    let mut world = open_world(cfg.clone(), load.as_deref(), false)?;
     let minted = world.ledger.minted();
     let hash = world.run()?;
     let elapsed = t0.elapsed();
-
+    // Preserve the existing full summary, but allow short runs useful for saves.
+    if world.stats.months.is_empty() {
+        println!(
+            "Completed day {}; output hash {:016x}; files: {}",
+            world.day, hash, world.cfg.out_dir
+        );
+        if replay {
+            let mut cfg2 = cfg.clone();
+            cfg2.out_dir = format!("{}/replay", cfg.out_dir);
+            let mut w2 = open_world(cfg2, load.as_deref(), false)?;
+            if hash != w2.run()? {
+                return Err(std::io::Error::other("replay mismatch"));
+            }
+            println!("replay check: deterministic");
+        }
+        if let Some(path) = &save {
+            world.save(path)?;
+        }
+        return Ok(());
+    }
     let months = &world.stats.months;
     let last = months.last().expect("at least one month");
     let total_bankrupt: u32 = months.iter().map(|m| m.bankruptcies).sum();
     let total_entries: u32 = months.iter().map(|m| m.entries).sum();
     let total_exits: u32 = months.iter().map(|m| m.exits).sum();
     let last_year = &months[months.len().saturating_sub(MONTHS_PER_YEAR as usize)..];
-    let mean = |f: &dyn Fn(&stats::MonthRow) -> f64| last_year.iter().map(f).sum::<f64>() / last_year.len() as f64;
+    let mean = |f: &dyn Fn(&stats::MonthRow) -> f64| {
+        last_year.iter().map(f).sum::<f64>() / last_year.len() as f64
+    };
     let sd = |f: &dyn Fn(&stats::MonthRow) -> f64, mu: f64| {
         (last_year.iter().map(|m| (f(m) - mu).powi(2)).sum::<f64>() / last_year.len() as f64).sqrt()
     };
@@ -222,7 +293,10 @@ fn main() -> std::io::Result<()> {
 
     println!();
     println!("=== econsim run complete ===");
-    println!("seed {}  days {}  households {}  firms {} -> {}  wall {:.2?}", cfg.seed, cfg.days, cfg.n_hh, cfg.n_firms, last.firms, elapsed);
+    println!(
+        "seed {}  days {}  households {}  firms {} -> {}  wall {:.2?}",
+        world.cfg.seed, world.day, world.cfg.n_hh, world.cfg.n_firms, last.firms, elapsed
+    );
     println!("policy at end: {}", world.gov.policy.describe());
     println!("money: initial {} cents, now {} cents in circulation (minted - burned = ledger total {}); {} transfers; conserved every tick: yes",
         minted, world.ledger.money_supply(), world.ledger.total(), world.ledger.transfers);
@@ -241,36 +315,49 @@ fn main() -> std::io::Result<()> {
         last.loans, lent, defaults, last.bank_cash, last.policy_rate * 100.0, last.loan_rate * 100.0, last.inflation * 100.0);
     println!("            debt {} cents ({} held by the bank) at {:.1}%; market cap {} cents, {} shares traded last month",
         last.gov_debt, last.bonds_bank, last.bond_rate * 100.0, last.market_cap, last.stock_volume);
-    if cfg.elections {
-        let shares: Vec<String> = politics::PARTIES.iter().zip(last.vote_shares.iter()).map(|((n, _), v)| format!("{} {:.0}%", n, v * 100.0)).collect();
+    if world.cfg.elections {
+        let shares: Vec<String> = politics::PARTIES
+            .iter()
+            .zip(last.vote_shares.iter())
+            .map(|((n, _), v)| format!("{} {:.0}%", n, v * 100.0))
+            .collect();
         println!("            politics: {} elections; in office: {}; last vote {}; mean preference {:.2}",
             world.gov.elections_held, world.gov.incumbent.map(|k| politics::PARTIES[k].0).unwrap_or("-"), shares.join(", "), last.mean_pref);
     }
-    if cfg.demographics {
+    if world.cfg.demographics {
         let births: u32 = months.iter().map(|m| m.births).sum();
         let deaths: u32 = months.iter().map(|m| m.deaths).sum();
-        println!("            people: {} alive ({} minors, {} retirees), {} births and {} deaths over the run, mean age {:.1}, life expectancy at death {:.1}, dependency ratio {:.2}, parent-child skill correlation {:.2} over {} who came of age",
-            last.population, last.minors, last.retirees, births, deaths, last.mean_age, last.life_expectancy, last.dependency, last.mobility_corr, world.mobility.len());
+        println!("            people: {} alive ({} minors, {} retirees), {} births and {} deaths over the run, mean age {:.1}, life expectancy at death {:.1}, dependency ratio {:.2}, parent-child skill correlation {:.2}",
+            last.population, last.minors, last.retirees, births, deaths, last.mean_age, last.life_expectancy, last.dependency, last.mobility_corr);
     }
-    println!("firm dynamics: {} bankruptcies, {} voluntary exits, {} entries; {} events logged", total_bankrupt, total_exits, total_entries, world.events.count);
+    println!(
+        "firm dynamics: {} bankruptcies, {} voluntary exits, {} entries; {} events logged",
+        total_bankrupt, total_exits, total_entries, world.events.count
+    );
     println!("output hash {:016x}", hash);
     println!("            homes: {} ({} couples); schooling: public {} pupils / {} teachers (quality {:.2}), private {} pupils / {} teachers (quality {:.2}); public spend last month {}, tuition {}",
         last.homes, last.couples, last.pupils_public, last.teachers_public, last.public_quality, last.pupils_private, last.teachers_private,
         last.private_quality, last.education_spend, last.tuition);
-    println!("files: {d}/daily.csv {d}/monthly.csv {d}/events.log {d}/watch.log {d}/people.csv {d}/homes.csv {d}/firms.csv", d = cfg.out_dir);
+    println!("files: {d}/daily.csv {d}/monthly.csv {d}/events.log {d}/watch.log {d}/people.csv {d}/homes.csv {d}/firms.csv", d = world.cfg.out_dir);
 
     if replay {
         let mut cfg2 = cfg.clone();
         cfg2.out_dir = format!("{}/replay", cfg.out_dir);
         cfg2.quiet = true;
-        let mut w2 = World::new(cfg2)?;
+        let mut w2 = open_world(cfg2, load.as_deref(), false)?;
         let hash2 = w2.run()?;
         if hash == hash2 {
-            println!("replay check: identical output hash {:016x} -> deterministic", hash2);
+            println!(
+                "replay check: identical output hash {:016x} -> deterministic",
+                hash2
+            );
         } else {
             println!("replay check FAILED: {:016x} != {:016x}", hash, hash2);
             std::process::exit(1);
         }
+    }
+    if let Some(path) = &save {
+        world.save(path)?;
     }
     Ok(())
 }
