@@ -126,6 +126,13 @@ pub struct MonthRow {
     pub built: i64,
     pub avg_commute: f64,
     pub immigrants: u32,
+    pub traffic_commute: u64,
+    pub traffic_shopping: u64,
+    pub traffic_freight: u64,
+    pub traffic_routed: u64,
+    pub traffic_off_network: u64,
+    pub traffic_peak_flow: u64,
+    pub traffic_mean_delay: f64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -198,7 +205,7 @@ impl Stats {
         let fg: Vec<String> = GOODS.iter().map(|g| format!("firms_{}", g.name)).collect();
         let eg: Vec<String> = GOODS.iter().map(|g| format!("employed_{}", g.name)).collect();
         let vs: Vec<String> = crate::politics::PARTIES.iter().map(|(n, _)| format!("votes_{}", n.to_lowercase())).collect();
-        writeln!(w, "month,year,price,{},wage,real_wage,unemployment,unemp_low_skill,unemp_high_skill,output,sales,unmet,inventory,firms,{},{},bankruptcies,entries,exits,dividends,markup,gini,top10_share,hh_cash,firm_cash,gov_cash,taxes,benefits,universal_dividend,mean_skill,pay_p10,pay_p90,hires,fires,quits,bank_cash,money_supply,loans,lent,defaults,written_off,policy_rate,loan_rate,bond_rate,inflation,deposit_interest,printed,gov_debt,bonds_bank,bond_interest,bonds_issued,market_cap,stock_volume,stock_turnover,equity_issued,mean_pref,incumbent,{},population,adults,minors,retirees,births,deaths,matured,mean_age,dependency,life_expectancy,mobility_corr,pensions,child_benefit,homes,couples,unions,separations,pupils_public,pupils_private,teachers_public,teachers_private,public_quality,private_quality,education_spend,tuition,hc_new_adults,housing_capacity,homes_housed,unhoused,business_slots,business_used,school_capacity,avg_land_value,rent_revenue,built,avg_commute,immigrants",
+        writeln!(w, "month,year,price,{},wage,real_wage,unemployment,unemp_low_skill,unemp_high_skill,output,sales,unmet,inventory,firms,{},{},bankruptcies,entries,exits,dividends,markup,gini,top10_share,hh_cash,firm_cash,gov_cash,taxes,benefits,universal_dividend,mean_skill,pay_p10,pay_p90,hires,fires,quits,bank_cash,money_supply,loans,lent,defaults,written_off,policy_rate,loan_rate,bond_rate,inflation,deposit_interest,printed,gov_debt,bonds_bank,bond_interest,bonds_issued,market_cap,stock_volume,stock_turnover,equity_issued,mean_pref,incumbent,{},population,adults,minors,retirees,births,deaths,matured,mean_age,dependency,life_expectancy,mobility_corr,pensions,child_benefit,homes,couples,unions,separations,pupils_public,pupils_private,teachers_public,teachers_private,public_quality,private_quality,education_spend,tuition,hc_new_adults,housing_capacity,homes_housed,unhoused,business_slots,business_used,school_capacity,avg_land_value,rent_revenue,built,avg_commute,immigrants,traffic_commute,traffic_shopping,traffic_freight,traffic_routed,traffic_off_network,traffic_peak_flow,traffic_mean_delay",
             pg.join(","), fg.join(","), eg.join(","), vs.join(","))?;
         for m in &self.months {
             let pg: Vec<String> = m.prices.iter().map(|p| format!("{:.2}", p)).collect();
@@ -207,7 +214,7 @@ impl Stats {
             let vs: Vec<String> = m.vote_shares.iter().map(|v| format!("{:.4}", v)).collect();
             writeln!(
                 w,
-                "{},{:.3},{:.3},{},{:.2},{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{},{},{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{:.2},{:.3},{:.1},{:.3},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{:.2},{}",
+                "{},{:.3},{:.3},{},{:.2},{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{},{},{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{:.4},{},{},{},{},{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{:.2},{:.3},{:.1},{:.3},{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{:.2},{},{},{},{},{},{},{},{:.4}",
                 m.month,
                 m.month as f64 / crate::sim::MONTHS_PER_YEAR as f64,
                 m.price_index, pg.join(","), m.wage, m.real_wage, m.unemployment, m.unemp_low_skill, m.unemp_high_skill,
@@ -223,7 +230,8 @@ impl Stats {
                 m.homes, m.couples, m.unions, m.separations, m.pupils_public, m.pupils_private, m.teachers_public, m.teachers_private,
                 m.public_quality, m.private_quality, m.education_spend, m.tuition, m.hc_new_adults,
                 m.housing_capacity, m.homes_housed, m.unhoused, m.business_slots, m.business_used, m.school_capacity,
-                m.avg_land_value, m.rent_revenue, m.built, m.avg_commute, m.immigrants
+                m.avg_land_value, m.rent_revenue, m.built, m.avg_commute, m.immigrants,
+                m.traffic_commute, m.traffic_shopping, m.traffic_freight, m.traffic_routed, m.traffic_off_network, m.traffic_peak_flow, m.traffic_mean_delay
             )?;
         }
         self.daily.as_mut().expect("stats output attached").flush()?;

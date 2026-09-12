@@ -8,9 +8,9 @@
 use crate::{city::Zone, goods::SHELTER, ledger::Account, sim::World};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ConstructionStall { Working, Materials, Labor, Budget }
+pub enum ConstructionStall { Working, Materials, Labor, Budget, Access }
 impl ConstructionStall {
-    pub fn name(self) -> &'static str { match self { Self::Working => "working", Self::Materials => "materials shortage", Self::Labor => "labor shortage", Self::Budget => "budget exhausted" } }
+    pub fn name(self) -> &'static str { match self { Self::Access => "road access missing", Self::Working => "working", Self::Materials => "materials shortage", Self::Labor => "labor shortage", Self::Budget => "budget exhausted" } }
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ConstructionProject {
@@ -42,7 +42,7 @@ impl World {
         if zone == Zone::Empty { return Ok(()); }
         let escrow = self.ledger.open();
         self.ledger.transfer(self.gov.account, escrow, budget, self.day);
-        let work_required = match zone { Zone::Residential => 40.0, Zone::Business => 70.0, Zone::School => 100.0, Zone::Park => 20.0, Zone::Empty => unreachable!() };
+        let work_required = match zone { Zone::Residential => 40.0, Zone::Business => 70.0, Zone::School => 100.0, Zone::Park => 20.0, Zone::Road => 15.0, Zone::Empty => unreachable!() };
         self.construction.push(ConstructionProject { tile, zone, materials_required: (work_required * 4.0) as i64, materials_delivered: 0, work_required, work_done: 0.0, budget, spent: 0, escrow, stall: ConstructionStall::Working });
         self.events.log(self.day, "construction", &format!("{} project started at ({x},{y}); budget {budget}", zone.name()));
         Ok(())
@@ -65,10 +65,14 @@ impl World {
         let mut projects = std::mem::take(&mut self.construction);
         for p in &mut projects {
             // Delivery precedes building; materials bound cumulative work.
+            let mut reachable_supplier = false;
             for &f in &builders {
+                if !self.city.ensure_route(self.firms.tile[f], p.tile) { continue; }
+                reachable_supplier = true;
                 let price = self.firms.price[f].max(1);
                 let units = (p.materials_required - p.materials_delivered).min(self.firms.inventory[f].max(0)).min(self.ledger.balance(p.escrow) / price);
                 if units <= 0 { continue; }
+                self.city.traffic.add_trip(self.firms.tile[f], p.tile, crate::traffic::TripKind::Freight, ((units + 49) / 50) as u64);
                 let cost = units * price;
                 self.ledger.transfer(p.escrow, self.firms.account[f], cost, self.day);
                 self.firms.inventory[f] -= units;
@@ -102,7 +106,7 @@ impl World {
             let cannot_buy = p.materials_delivered < p.materials_required
                 && !builders.is_empty()
                 && builders.iter().all(|&f| self.firms.price[f].max(1) > self.ledger.balance(p.escrow));
-            p.stall = if p.work_done > before { ConstructionStall::Working } else if self.ledger.balance(p.escrow) == 0 || cannot_buy { ConstructionStall::Budget } else if material_limit <= p.work_done + 1e-9 { ConstructionStall::Materials } else { ConstructionStall::Labor };
+            p.stall = if p.work_done > before { ConstructionStall::Working } else if !reachable_supplier && material_limit <= p.work_done + 1e-9 { ConstructionStall::Access } else if self.ledger.balance(p.escrow) == 0 || cannot_buy { ConstructionStall::Budget } else if material_limit <= p.work_done + 1e-9 { ConstructionStall::Materials } else { ConstructionStall::Labor };
         }
         let mut completed = false;
         for p in projects {
@@ -147,6 +151,8 @@ mod tests {
         cfg.out_dir = format!("/tmp/econsim-construction-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
         cfg.quiet = true;
         let mut w = World::new(cfg).unwrap();
+        // These scarcity tests isolate resources from access; provide a spur.
+        for x in 0..3 { w.city.set(x, 1, Zone::Road); }
         w.ledger.mint(w.gov.account, 2_000_000);
         for &f in &w.firms.active_list {
             let f = f as usize;
@@ -243,6 +249,8 @@ mod budget_tests {
         cfg.n_firms = 10;
         cfg.out_dir = format!("/tmp/econsim-construction-budget-{}", std::process::id());
         let mut w = World::new(cfg).unwrap();
+        // These scarcity tests isolate resources from access; provide a spur.
+        for x in 0..3 { w.city.set(x, 1, Zone::Road); }
         let available = w.ledger.balance(w.gov.account);
         if available > 0 { w.ledger.transfer(w.gov.account, w.homes.account[0], available, 0); }
         assert!(w.start_construction(0,0,Zone::Residential).is_err());

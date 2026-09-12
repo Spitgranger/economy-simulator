@@ -191,7 +191,7 @@ const CHARTS = [
 ];
 
 let S = null, draft = {}, dirty = new Set();
-const ZONES = [['empty','Demolish','#00000000'],['residential','Residential','#2a78d6'],['business','Business','#eb6834'],['school','School','#1baf7a'],['park','Park','#7cb342']];
+const ZONES = [['empty','Demolish','#00000000'],['residential','Residential','#2a78d6'],['business','Business','#eb6834'],['school','School','#1baf7a'],['park','Park','#7cb342'],['road','Road','#586474']];
 let tool = 1;
 const TILE = 28;
 
@@ -306,6 +306,9 @@ function renderCharts() {
 function buildCity() {
   $('#palette').innerHTML = ZONES.map(([k,name,c],z) => `<button data-zone="${z}" aria-pressed="${z===tool}"><i style="background:${z?c:'transparent'};border:1px solid var(--axis)"></i>${name}${z?` <span style="color:var(--muted)">$${fmtInt((S?S.city.costs[z]:0)/100)}</span>`:''}</button>`).join('');
   document.querySelectorAll('#palette button').forEach(b => b.addEventListener('click', () => { tool = +b.dataset.zone; document.querySelectorAll('#palette button').forEach(x => x.setAttribute('aria-pressed', x === b)); }));
+  const overlay = document.createElement('select'); overlay.id='traffic-view';
+  overlay.innerHTML='<option value="0">City</option><option value="1">Traffic: green below 400, red at 800</option><option value="2">Road access: green / red</option>';
+  $('#palette').after(overlay); overlay.addEventListener('change',()=>{if(S)renderCity();});
   const cv = $('#city');
   cv.addEventListener('click', e => {
     if (!S) return;
@@ -325,6 +328,7 @@ function buildCity() {
     tip.hidden = false;
     const project = (S.projects||[]).find(p=>p.x===x && p.y===y);
     tip.textContent = project ? `(${x},${y}) ${ZONES[project.zone][1]}: ${pct(project.progress)} · ${project.status} · materials ${project.materials}/${project.required}` : `(${x},${y}) ${ZONES[z][1].toLowerCase()}${cap?` · ${occ}/${cap} ${z===1?'homes':z===2?'firms':'pupils'}`:''} · land ${fmtCents(lv)}`;
+    tip.textContent += ` · road flow ${S.traffic.flows[y*S.city.w+x]}/400 · road access ${S.traffic.access[y*S.city.w+x]?'yes':'no'}`;
     tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 260) + 'px'; tip.style.top = (e.clientY - r.top + 14) + 'px';
   });
   cv.addEventListener('mouseleave', () => $('#citytip').hidden = true);
@@ -351,6 +355,13 @@ function renderCity() {
     ctx.globalAlpha = 1;
     if (cap) { ctx.fillStyle = dark ? '#fff' : '#0b0b0b'; ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono'); ctx.textAlign = 'center'; ctx.fillText(z === 3 ? 'S' : String(occ), px + TILE/2, py + TILE/2 + 4); }
     if (z === 4) { ctx.fillStyle = dark ? '#fff' : '#0b0b0b'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('♣', px + TILE/2, py + TILE/2 + 4); }
+  }
+  const view=+$('#traffic-view').value;
+  if(view) for(let i=0;i<c.tiles.length;i++) {
+    if(view===1 && c.tiles[i][0]!==5) continue;
+    const load=Math.min(2,S.traffic.flows[i]/400)/2;
+    ctx.fillStyle=view===2 ? (S.traffic.access[i]?'#35b878':'#d64d40') : `rgb(${255*load},${200*(1-load)},40)`;
+    ctx.globalAlpha=0.75; ctx.fillRect(i%c.w*TILE+2,Math.floor(i/c.w)*TILE+2,TILE-4,TILE-4); ctx.globalAlpha=1;
   }
   for (const [x,y,z] of S.queued_builds||[]) {
     ctx.strokeStyle = ZONES[z][2] || '#b45309'; ctx.lineWidth = 2;

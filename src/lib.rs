@@ -21,3 +21,5 @@ pub mod sim;
 pub mod stats;
 
 pub use sim::{Config, World};
+
+pub mod traffic;
