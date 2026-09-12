@@ -66,7 +66,7 @@ impl World {
     /// Expected vote shares if an election were held now: the three parties
     /// plus, in interactive mode, the player's bundle as "Government".
     /// Returns (shares over N_PARTIES + 1, mean preference). Does not change state.
-    pub(crate) fn poll(&self) -> ([f64; N_PARTIES + 1], f64) {
+    pub fn poll(&self) -> ([f64; N_PARTIES + 1], f64) {
         let cpi = self.stats.last_cpi.max(1e-9);
         let player_pos = self.gov.player_policy.as_ref().map(|p| p.position());
         let incumbent = self.gov.incumbent;

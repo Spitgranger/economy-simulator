@@ -7,6 +7,7 @@ pub const NO_TILE: u16 = u16::MAX;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum Zone {
     Empty = 0,
     Residential = 1,
@@ -56,12 +57,14 @@ impl Zone {
 }
 
 #[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Tile {
     pub zone: Zone,
     pub occupants: u16, // homes on residential, firms on business
     pub land_value: i64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct City {
     pub w: usize,
     pub h: usize,

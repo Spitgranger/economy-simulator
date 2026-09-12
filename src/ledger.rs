@@ -6,6 +6,7 @@
 
 pub type Account = u32;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Ledger {
     balances: Vec<i64>,
     minted: i64,

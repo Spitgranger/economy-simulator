@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 
 #[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct DailyRow {
     pub day: u32,
     pub price_index: f64,
@@ -29,6 +30,7 @@ pub struct DailyRow {
 }
 
 #[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MonthRow {
     pub month: u32,
     pub price_index: f64,
@@ -126,8 +128,10 @@ pub struct MonthRow {
     pub immigrants: u32,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Stats {
-    daily: BufWriter<File>,
+    #[serde(skip)]
+    daily: Option<BufWriter<File>>,
     pub months: Vec<MonthRow>,
     pub last_prices: [f64; NG],
     pub last_wage: f64,
@@ -145,6 +149,11 @@ fn fnv(mut h: u64, bytes: &[u8]) -> u64 {
 }
 
 impl Stats {
+    pub(crate) fn reattach(&mut self, out_dir: &str) -> std::io::Result<()> {
+        self.daily = Self::new(out_dir, self.last_wage)?.daily;
+        Ok(())
+    }
+
     pub fn new(out_dir: &str, init_wage: f64) -> std::io::Result<Stats> {
         let mut daily = BufWriter::new(File::create(format!("{}/daily.csv", out_dir))?);
         let goods: Vec<String> = GOODS.iter().map(|g| format!("price_{}", g.name)).collect();
@@ -157,7 +166,7 @@ impl Stats {
         for g in 0..NG {
             last_prices[g] = GOODS[g].init_price as f64;
         }
-        Ok(Stats { daily, months: Vec::new(), last_prices, last_wage: init_wage, last_cpi: 100.0, last_daily: None, hash: 0xcbf2_9ce4_8422_2325 })
+        Ok(Stats { daily: Some(daily), months: Vec::new(), last_prices, last_wage: init_wage, last_cpi: 100.0, last_daily: None, hash: 0xcbf2_9ce4_8422_2325 })
     }
 
     pub fn record_day(&mut self, r: &DailyRow) {
@@ -172,7 +181,7 @@ impl Stats {
             r.unmet, r.inventory, r.hh_cash, r.firm_cash, r.gov_cash, r.bank_cash, r.money_supply, r.loans, r.gov_debt, r.population, r.firms
         );
         self.hash = fnv(self.hash, line.as_bytes());
-        self.daily.write_all(line.as_bytes()).expect("write daily.csv");
+        self.daily.as_mut().expect("stats output attached").write_all(line.as_bytes()).expect("write daily.csv");
     }
 
     pub fn record_month(&mut self, r: MonthRow) {
@@ -217,26 +226,33 @@ impl Stats {
                 m.avg_land_value, m.rent_revenue, m.built, m.avg_commute, m.immigrants
             )?;
         }
-        self.daily.flush()?;
+        self.daily.as_mut().expect("stats output attached").flush()?;
         Ok(())
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct EventLog {
-    w: BufWriter<File>,
+    #[serde(skip)]
+    w: Option<BufWriter<File>>,
     pub count: u64,
     /// the most recent events, for a live view
     pub recent: std::collections::VecDeque<(u32, String, String)>,
 }
 
 impl EventLog {
+    pub(crate) fn reattach(&mut self, path: &str) -> std::io::Result<()> {
+        self.w = Self::new(path)?.w;
+        Ok(())
+    }
+
     pub fn new(path: &str) -> std::io::Result<EventLog> {
-        Ok(EventLog { w: BufWriter::new(File::create(path)?), count: 0, recent: std::collections::VecDeque::with_capacity(64) })
+        Ok(EventLog { w: Some(BufWriter::new(File::create(path)?)), count: 0, recent: std::collections::VecDeque::with_capacity(64) })
     }
 
     pub fn log(&mut self, day: u32, kind: &str, msg: &str) {
         self.count += 1;
-        writeln!(self.w, "d{:05}\t{:<10}\t{}", day, kind, msg).expect("write event log");
+        writeln!(self.w.as_mut().expect("event output attached"), "d{:05}\t{:<10}\t{}", day, kind, msg).expect("write event log");
         if self.recent.len() >= 60 {
             self.recent.pop_front();
         }
@@ -244,7 +260,7 @@ impl EventLog {
     }
 
     pub fn flush(&mut self) {
-        self.w.flush().expect("flush event log");
+        self.w.as_mut().expect("event output attached").flush().expect("flush event log");
     }
 }
 

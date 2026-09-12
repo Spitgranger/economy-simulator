@@ -10,6 +10,7 @@ use crate::people::People;
 pub const K: usize = 3;
 pub const NO_FIRM: u32 = u32::MAX;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Homes {
     pub n: usize,
     pub active: Vec<bool>,

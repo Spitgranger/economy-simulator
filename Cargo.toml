@@ -2,9 +2,15 @@
 name = "econsim"
 version = "0.1.0"
 edition = "2021"
-description = "Headless agent-based economy simulator - proof of concept (milestones M0/M1)"
+description = "Agent-based economy engine with government policy, resource-constrained construction, and optional native graphics"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+bincode = "1.3"
+macroquad = { version = "0.4.14", optional = true, default-features = false }
+
+[features]
+desktop = ["dep:macroquad"]
 
 [profile.release]
 opt-level = 3

@@ -73,7 +73,7 @@ impl World {
                 let cur = self.ppl.school[c];
                 if cur != crate::people::NO_FIRM {
                     let f = cur as usize;
-                    if self.firms.active[f] && !self.firms.public[f] && self.firms.inventory[f] > 0
+                    if self.firms.active[f] && self.firms.is_school(f) && !self.firms.public[f] && self.firms.inventory[f] > 0
                         && self.firms.quality[f] > public_q && self.firms.price[f] <= budget && self.firms.price[f] <= cash
                     {
                         best = Some((f, self.firms.quality[f]));
@@ -87,7 +87,7 @@ impl World {
                         continue;
                     }
                     let f = f as usize;
-                    if !self.firms.active[f] || self.firms.public[f] {
+                    if !self.firms.active[f] || !self.firms.is_school(f) || self.firms.public[f] {
                         continue;
                     }
                     let tuition = self.firms.price[f];

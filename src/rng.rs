@@ -3,6 +3,7 @@
 //! subsystem never perturbs another (see `World::new`).
 
 #[derive(Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Rng {
     s: [u64; 4],
 }

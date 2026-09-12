@@ -103,6 +103,7 @@ button:disabled { opacity: 0.5; cursor: default; }
     <button data-speed="28">1 month/s</button>
     <button data-speed="336">1 year/s</button>
     <button data-speed="max">max</button>
+    <button id="save-game">Save game</button>
   </div>
   <div class="poll" id="poll"></div>
 </header>
@@ -138,8 +139,11 @@ button:disabled { opacity: 0.5; cursor: default; }
         <div class="palette" id="palette"></div>
         <div class="citystats" id="citystats"></div>
       </div>
+      <p id="command-message" role="status" style="color:var(--ink-2)">Orders fund at month end. Construction needs materials and labor.</p>
+      <div class="actions" style="margin-bottom:10px"><button id="cancel-queued">Cancel queued orders</button><span style="color:var(--muted)">Use step month to fund projects; continue time to build.</span></div>
       <div class="citywrap"><canvas id="city" width="672" height="448"></canvas><div class="tip" id="citytip" hidden></div></div>
     </div>
+    <div class="panel" style="margin-bottom:14px"><h2>Construction projects</h2><div id="projects"></div><p style="color:var(--muted);font-size:12px">Budgets reserve treasury funds. Cancellation refunds unspent funds; used materials and work are lost. Materials currently use shelter-sector inventory.</p></div>
     <div class="charts" id="charts"></div>
   </main>
 </div>
@@ -319,7 +323,8 @@ function buildCity() {
     const [z, occ, lv] = S.city.tiles[y*S.city.w + x];
     const cap = S.city.capacity[z];
     tip.hidden = false;
-    tip.innerHTML = `(${x},${y}) ${ZONES[z][1].toLowerCase()}${cap?` · ${occ}/${cap} ${z===1?'homes':z===2?'firms':'pupils'}`:''} · land ${fmtCents(lv)}`;
+    const project = (S.projects||[]).find(p=>p.x===x && p.y===y);
+    tip.textContent = project ? `(${x},${y}) ${ZONES[project.zone][1]}: ${pct(project.progress)} · ${project.status} · materials ${project.materials}/${project.required}` : `(${x},${y}) ${ZONES[z][1].toLowerCase()}${cap?` · ${occ}/${cap} ${z===1?'homes':z===2?'firms':'pupils'}`:''} · land ${fmtCents(lv)}`;
     tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 260) + 'px'; tip.style.top = (e.clientY - r.top + 14) + 'px';
   });
   cv.addEventListener('mouseleave', () => $('#citytip').hidden = true);
@@ -347,6 +352,28 @@ function renderCity() {
     if (cap) { ctx.fillStyle = dark ? '#fff' : '#0b0b0b'; ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono'); ctx.textAlign = 'center'; ctx.fillText(z === 3 ? 'S' : String(occ), px + TILE/2, py + TILE/2 + 4); }
     if (z === 4) { ctx.fillStyle = dark ? '#fff' : '#0b0b0b'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('♣', px + TILE/2, py + TILE/2 + 4); }
   }
+  for (const [x,y,z] of S.queued_builds||[]) {
+    ctx.strokeStyle = ZONES[z][2] || '#b45309'; ctx.lineWidth = 2;
+    ctx.strokeRect(x*TILE+3,y*TILE+3,TILE-6,TILE-6);
+  }
+  for (const p of S.projects||[]) {
+    const x=p.x*TILE, y=p.y*TILE;
+    ctx.fillStyle = '#b45309'; ctx.fillRect(x+2,y+2,TILE-4,TILE-4);
+    ctx.fillStyle = '#fff'; ctx.font='10px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(Math.round(p.progress*100)+'%',x+TILE/2,y+16);
+    ctx.fillStyle = '#1baf7a'; ctx.fillRect(x+2,y+TILE-5,(TILE-4)*p.progress,3);
+  }
+  $('#command-message').textContent = S.command_message || '';
+  $('#projects').replaceChildren();
+  if (!(S.projects||[]).length) $('#projects').textContent = `${(S.queued_builds||[]).length} queued orders; no active construction.`;
+  for (const p of S.projects||[]) {
+    const row=document.createElement('div'); row.style.marginBottom='8px';
+    const label=document.createElement('span');
+    label.textContent=`(${p.x},${p.y}) ${ZONES[p.zone][1]} — ${pct(p.progress)} · ${p.status} · materials ${p.materials}/${p.required} · spent ${fmtCents(p.spent)} / ${fmtCents(p.budget)} `;
+    const cancel=document.createElement('button'); cancel.textContent='Cancel project';
+    cancel.addEventListener('click',()=>fetch('/policy',{method:'POST',body:`cancel=${p.x},${p.y}`}));
+    row.append(label,cancel); $('#projects').append(row);
+  }
   const n = S.now;
   $('#citystats').innerHTML = [
     `homes ${fmtInt(n.homes_housed||0)}/${fmtInt(n.housing_capacity||0)} housed`,
@@ -361,8 +388,10 @@ function renderEvents() {
   $('#events').innerHTML = S.events.map(e => `<div title="${e.msg.replace(/"/g,'&quot;')}"><span class="k ${e.kind}">${e.kind}</span> <span class="k">yr ${Math.floor(e.day/336)+1}</span> ${e.msg}</div>`).join('');
 }
 
-document.querentered = false;
-document.querySelectorAll('#controls button').forEach(b => b.addEventListener('click', () => {
+$('#save-game').addEventListener('click',()=>fetch('/policy',{method:'POST',body:'save=1'}));
+$('#cancel-queued').addEventListener('click',()=>fetch('/policy',{method:'POST',body:'cancel-all=1'}));
+
+document.querySelectorAll('#controls button[data-ctl], #controls button[data-step], #controls button[data-speed]').forEach(b => b.addEventListener('click', () => {
   if (b.dataset.ctl) fetch('/control', {method:'POST', body:`action=${b.dataset.ctl}`});
   else if (b.dataset.speed) fetch('/control', {method:'POST', body:`action=speed&value=${b.dataset.speed}`});
   else if (b.dataset.step) fetch('/control', {method:'POST', body:`action=step&value=${b.dataset.step}`});

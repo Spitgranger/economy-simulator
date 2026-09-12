@@ -3,8 +3,9 @@
 //! and takes the player's decisions back. The player is the government; the
 //! voters judge them every four years.
 
+use crate::commands::{Command, SimulationClock};
 use crate::politics::{N_PARTIES, PARTIES};
-use crate::sim::{Config, World, DAYS_PER_MONTH, DAYS_PER_YEAR, MONTHS_PER_YEAR};
+use crate::sim::{World, DAYS_PER_MONTH, DAYS_PER_YEAR, MONTHS_PER_YEAR};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -24,15 +25,24 @@ struct Shared {
     snapshot: Mutex<String>,
 }
 
-pub fn serve(cfg: Config, port: u16) -> std::io::Result<()> {
+pub fn serve(world: World, port: u16, save: Option<String>) -> std::io::Result<()> {
     let shared = Arc::new(Shared {
-        control: Mutex::new(Control { speed: 7.0, paused: true, step_days: 0, pending: Vec::new() }),
+        control: Mutex::new(Control {
+            speed: 7.0,
+            paused: true,
+            step_days: 0,
+            pending: Vec::new(),
+        }),
         snapshot: Mutex::new(String::from("{\"loading\":true}")),
     });
-    let s2 = shared.clone();
-    std::thread::spawn(move || sim_loop(cfg, s2));
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    println!("econsim is serving at http://127.0.0.1:{}  (Ctrl-C to stop)", port);
+    let s2 = shared.clone();
+    let save = save.unwrap_or_else(|| format!("{}/city.econsave", world.cfg.out_dir));
+    std::thread::spawn(move || sim_loop(world, s2, save));
+    println!(
+        "econsim is serving at http://127.0.0.1:{}  (Ctrl-C to stop)",
+        port
+    );
     for stream in listener.incoming() {
         if let Ok(stream) = stream {
             let sh = shared.clone();
@@ -42,81 +52,83 @@ pub fn serve(cfg: Config, port: u16) -> std::io::Result<()> {
     Ok(())
 }
 
-fn sim_loop(cfg: Config, shared: Arc<Shared>) {
-    let mut world = World::new(cfg).expect("world");
-    world.gov.player_policy = Some(world.gov.policy.clone());
-    world.gov.player_in_power = true;
-    world.events.log(0, "player", "interactive mode: you are the government; elections every 4 years judge your bundle");
-    let mut approval: Vec<(u32, f64, f64)> = Vec::new(); // (month, government share, mean preference)
+fn parse_command(k: &str, v: &str) -> Result<Command, String> {
+    match k {
+        "build" => {
+            let parts: Vec<&str> = v.split(',').collect();
+            if parts.len() != 3 {
+                return Err("build expects x,y,zone".into());
+            }
+            let x = parts[0].parse().map_err(|_| "invalid x")?;
+            let y = parts[1].parse().map_err(|_| "invalid y")?;
+            let z: u8 = parts[2].parse().map_err(|_| "invalid zone")?;
+            if z > 4 {
+                return Err("invalid zone".into());
+            }
+            Ok(Command::Build {
+                x,
+                y,
+                zone: crate::city::Zone::from_u8(z),
+            })
+        }
+        "cancel" => {
+            let (x, y) = v.split_once(',').ok_or("cancel expects x,y")?;
+            Ok(Command::CancelBuild {
+                x: x.parse().map_err(|_| "invalid x")?,
+                y: y.parse().map_err(|_| "invalid y")?,
+            })
+        }
+        "cancel-all" => Ok(Command::CancelAllQueuedBuilds),
+        "print" => Ok(Command::PrintMoney {
+            amount: v.parse().map_err(|_| "invalid money amount")?,
+        }),
+        _ => Ok(Command::SetPolicy {
+            key: k.into(),
+            value: v.into(),
+        }),
+    }
+}
+
+fn sim_loop(mut world: World, shared: Arc<Shared>, save: String) {
+    world.start_player_session();
+    let mut approval: Vec<(u32, f64, f64)> = Vec::new();
     let mut last_month = u32::MAX;
-    let mut carry = 0.0f64;
+    let mut clock = SimulationClock::new(DAYS_PER_MONTH);
     let mut last = Instant::now();
     let mut dirty = true;
+    let mut previous_control = (7.0, true);
+    let mut message =
+        "Construction is funded at month end, then needs materials and labor.".to_string();
     loop {
-        let (speed, paused, mut n, pending) = {
+        let (speed, paused, step_days, pending) = {
             let mut c = shared.control.lock().unwrap();
             let p = std::mem::take(&mut c.pending);
-            let n = c.step_days;
-            c.step_days = 0;
+            let n = std::mem::take(&mut c.step_days);
             (c.speed, c.paused, n, p)
         };
+        dirty |= previous_control != (speed, paused);
+        previous_control = (speed, paused);
         if !pending.is_empty() {
-            let mut player = world.gov.player_policy.clone().unwrap_or_default();
-            let mut changed = Vec::new();
-            for (k, v) in &pending {
-                if k == "build" {
-                    // "x,y,zone" from the city palette
-                    let parts: Vec<&str> = v.split(',').collect();
-                    if parts.len() == 3 {
-                        if let (Ok(x), Ok(y), Ok(z)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>(), parts[2].parse::<u8>()) {
-                            world.gov.pending_builds.push((x, y, z));
-                        }
-                    }
-                    continue;
+            for (k, v) in pending {
+                if k == "save" {
+                    message = match world.save(&save) {
+                        Ok(()) => format!("Saved to {save}"),
+                        Err(e) => format!("Save failed: {e}"),
+                    };
+                } else {
+                    message = match parse_command(&k, &v)
+                        .and_then(|c| world.apply_command(c).map_err(|e| e.to_string()))
+                    {
+                        Ok(outcome) => outcome.message,
+                        Err(e) => format!("Rejected: {e}"),
+                    };
                 }
-                if k == "print" {
-                    // one-off money creation (or destruction) is always the treasury's to do
-                    let amt: i64 = v.parse().unwrap_or(0);
-                    world.gov.pending_print += amt;
-                    world.events.log(world.day, "player", &format!("government orders {} of {} cents at month end", if amt >= 0 { "printing" } else { "burning" }, amt.abs()));
-                    continue;
-                }
-                if player.set(k, v).is_ok() {
-                    changed.push(format!("{}={}", k, v));
-                }
-            }
-            if changed.is_empty() {
-                // builds and prints are applied at month end; step to it if paused so the player sees it
-                dirty = true;
-                if paused && !world.gov.pending_builds.is_empty() {
-                    let mut c = shared.control.lock().unwrap();
-                    c.step_days += DAYS_PER_MONTH - (world.day % DAYS_PER_MONTH);
-                }
-                continue;
-            }
-            world.gov.player_policy = Some(player.clone());
-            if world.gov.player_in_power {
-                world.gov.policy = player;
-                world.events.log(world.day, "player", &format!("government sets {}", changed.join(", ")));
-            } else {
-                world.events.log(world.day, "player", &format!("opposition platform now {} (in force after the next election win)", changed.join(", ")));
             }
             dirty = true;
         }
         let now = Instant::now();
-        let dt = now.duration_since(last).as_secs_f64();
+        let n = clock.advance(now.duration_since(last), speed, paused, step_days);
         last = now;
-        if !paused {
-            if speed.is_infinite() {
-                n += DAYS_PER_MONTH;
-            } else {
-                carry += speed * dt;
-                let whole = carry.floor();
-                carry -= whole;
-                n += whole as u32;
-            }
-        }
-        n = n.min(DAYS_PER_YEAR);
         for _ in 0..n {
             world.tick_day();
             let month = world.day / DAYS_PER_MONTH;
@@ -127,7 +139,7 @@ fn sim_loop(cfg: Config, shared: Arc<Shared>) {
             }
         }
         if n > 0 || dirty {
-            let json = snapshot(&world, speed, paused, &approval);
+            let json = snapshot(&world, speed, paused, &approval, &message);
             *shared.snapshot.lock().unwrap() = json;
             dirty = false;
         }
@@ -155,10 +167,20 @@ fn esc(s: &str) -> String {
 }
 
 fn num(v: f64) -> String {
-    if v.is_finite() { format!("{:.4}", v) } else { "null".to_string() }
+    if v.is_finite() {
+        format!("{:.4}", v)
+    } else {
+        "null".to_string()
+    }
 }
 
-fn snapshot(w: &World, speed: f64, paused: bool, approval: &[(u32, f64, f64)]) -> String {
+fn snapshot(
+    w: &World,
+    speed: f64,
+    paused: bool,
+    approval: &[(u32, f64, f64)],
+    message: &str,
+) -> String {
     let pol = &w.gov.policy;
     let player = w.gov.player_policy.clone().unwrap_or_default();
     let (shares, mean_pref) = w.poll();
@@ -167,6 +189,7 @@ fn snapshot(w: &World, speed: f64, paused: bool, approval: &[(u32, f64, f64)]) -
     let last = months.last();
     let mut o = String::with_capacity(200_000);
     o.push('{');
+    o.push_str(&format!("\"command_message\":\"{}\",", esc(message)));
     o.push_str(&format!(
         "\"day\":{},\"year\":{},\"month\":{},\"speed\":{},\"paused\":{},\"player_in_power\":{},\"locked_until\":{},\"incumbent\":{},\"elections\":{},",
         w.day,
@@ -187,7 +210,11 @@ fn snapshot(w: &World, speed: f64, paused: bool, approval: &[(u32, f64, f64)]) -
             num(p.surplus_dividend), num(p.policy_rate), num(p.print_rate), num(p.ground_rent), num(p.position())
         )
     };
-    o.push_str(&format!("\"policy\":{},\"player_policy\":{},", pol_json(pol), pol_json(&player)));
+    o.push_str(&format!(
+        "\"policy\":{},\"player_policy\":{},",
+        pol_json(pol),
+        pol_json(&player)
+    ));
     o.push_str(&format!(
         "\"poll\":{{\"Market\":{},\"Centre\":{},\"Labour\":{},\"Government\":{}}},\"mean_pref\":{},",
         num(shares[0]), num(shares[1]), num(shares[2]), num(shares[3]), num(mean_pref)
@@ -207,7 +234,13 @@ fn snapshot(w: &World, speed: f64, paused: bool, approval: &[(u32, f64, f64)]) -
             num(m.public_quality), num(m.policy_rate), num(m.bond_rate), m.market_cap, num(m.life_expectancy), num(m.mobility_corr), m.taxes,
             m.benefits + m.universal_dividend + m.pensions + m.child_benefit + m.education_spend, num(m.mean_skill)
         ));
-        o.push_str(&format!(",\"loan_rate\":{},\"printed\":{},\"printed_total\":{},\"deposit_interest\":{}", num(m.loan_rate), m.printed, w.bank.printed_total, m.deposit_interest));
+        o.push_str(&format!(
+            ",\"loan_rate\":{},\"printed\":{},\"printed_total\":{},\"deposit_interest\":{}",
+            num(m.loan_rate),
+            m.printed,
+            w.bank.printed_total,
+            m.deposit_interest
+        ));
         o.push_str(&format!(
             ",\"housing_capacity\":{},\"homes_housed\":{},\"unhoused\":{},\"business_slots\":{},\"business_used\":{},\"school_capacity\":{},\"avg_land_value\":{},\"rent_revenue\":{},\"avg_commute\":{}",
             m.housing_capacity, m.homes_housed, m.unhoused, m.business_slots, m.business_used, m.school_capacity, m.avg_land_value, m.rent_revenue, num(m.avg_commute)
@@ -215,16 +248,45 @@ fn snapshot(w: &World, speed: f64, paused: bool, approval: &[(u32, f64, f64)]) -
     }
     o.push_str("},");
     // city grid: [zone, occupants, land value] per tile
-    o.push_str(&format!("\"city\":{{\"w\":{},\"h\":{},\"tiles\":[", w.city.w, w.city.h));
+    o.push_str(&format!(
+        "\"city\":{{\"w\":{},\"h\":{},\"tiles\":[",
+        w.city.w, w.city.h
+    ));
     for (i, t) in w.city.tiles.iter().enumerate() {
         if i > 0 {
             o.push(',');
         }
-        o.push_str(&format!("[{},{},{}]", t.zone as u8, t.occupants, t.land_value));
+        o.push_str(&format!(
+            "[{},{},{}]",
+            t.zone as u8, t.occupants, t.land_value
+        ));
     }
-    o.push_str(&format!("],\"costs\":[0,{},{},{},{}],\"capacity\":[0,{},{},{},0]}},",
-        crate::city::Zone::Residential.cost(), crate::city::Zone::Business.cost(), crate::city::Zone::School.cost(), crate::city::Zone::Park.cost(),
-        crate::city::Zone::Residential.capacity(), crate::city::Zone::Business.capacity(), crate::city::Zone::School.capacity()));
+    o.push_str(&format!(
+        "],\"costs\":[0,{},{},{},{}],\"capacity\":[0,{},{},{},0]}},",
+        crate::city::Zone::Residential.cost(),
+        crate::city::Zone::Business.cost(),
+        crate::city::Zone::School.cost(),
+        crate::city::Zone::Park.cost(),
+        crate::city::Zone::Residential.capacity(),
+        crate::city::Zone::Business.capacity(),
+        crate::city::Zone::School.capacity()
+    ));
+    o.push_str("\"projects\":[");
+    for (i, p) in w.construction.iter().enumerate() {
+        if i > 0 {
+            o.push(',');
+        }
+        let (x, y) = w.city.xy(p.tile);
+        o.push_str(&format!("{{\"x\":{x},\"y\":{y},\"zone\":{},\"progress\":{},\"materials\":{},\"required\":{},\"spent\":{},\"budget\":{},\"status\":\"{}\"}}",p.zone as u8,num(p.progress()),p.materials_delivered,p.materials_required,p.spent,p.budget,p.stall.name()));
+    }
+    o.push_str("],\"queued_builds\":[");
+    for (i, &(x, y, z)) in w.gov.pending_builds.iter().enumerate() {
+        if i > 0 {
+            o.push(',');
+        }
+        o.push_str(&format!("[{x},{y},{z}]"));
+    }
+    o.push_str("],");
     // series
     macro_rules! series {
         ($name:expr, $f:expr) => {{
@@ -240,31 +302,62 @@ fn snapshot(w: &World, speed: f64, paused: bool, approval: &[(u32, f64, f64)]) -
     }
     o.push_str("\"series\":{");
     series!("month", |m: &crate::stats::MonthRow| m.month.to_string());
-    series!("unemployment", |m: &crate::stats::MonthRow| num(m.unemployment));
+    series!("unemployment", |m: &crate::stats::MonthRow| num(
+        m.unemployment
+    ));
     series!("cpi", |m: &crate::stats::MonthRow| num(m.price_index));
     series!("inflation", |m: &crate::stats::MonthRow| num(m.inflation));
     series!("gini", |m: &crate::stats::MonthRow| num(m.gini));
     series!("real_wage", |m: &crate::stats::MonthRow| num(m.real_wage));
     series!("debt", |m: &crate::stats::MonthRow| m.gov_debt.to_string());
-    series!("treasury", |m: &crate::stats::MonthRow| m.gov_cash.to_string());
-    series!("money", |m: &crate::stats::MonthRow| m.money_supply.to_string());
-    series!("population", |m: &crate::stats::MonthRow| m.population.to_string());
+    series!("treasury", |m: &crate::stats::MonthRow| m
+        .gov_cash
+        .to_string());
+    series!("money", |m: &crate::stats::MonthRow| m
+        .money_supply
+        .to_string());
+    series!("population", |m: &crate::stats::MonthRow| m
+        .population
+        .to_string());
     series!("taxes", |m: &crate::stats::MonthRow| m.taxes.to_string());
-    series!("transfers", |m: &crate::stats::MonthRow| (m.benefits + m.universal_dividend + m.pensions + m.child_benefit + m.education_spend).to_string());
+    series!("transfers", |m: &crate::stats::MonthRow| (m.benefits
+        + m.universal_dividend
+        + m.pensions
+        + m.child_benefit
+        + m.education_spend)
+        .to_string());
     series!("firms", |m: &crate::stats::MonthRow| m.firms.to_string());
-    series!("market_cap", |m: &crate::stats::MonthRow| m.market_cap.to_string());
+    series!("market_cap", |m: &crate::stats::MonthRow| m
+        .market_cap
+        .to_string());
     series!("mean_pref", |m: &crate::stats::MonthRow| num(m.mean_pref));
-    series!("public_quality", |m: &crate::stats::MonthRow| num(m.public_quality));
-    series!("policy_rate", |m: &crate::stats::MonthRow| num(m.policy_rate));
+    series!("public_quality", |m: &crate::stats::MonthRow| num(
+        m.public_quality
+    ));
+    series!("policy_rate", |m: &crate::stats::MonthRow| num(
+        m.policy_rate
+    ));
     series!("loan_rate", |m: &crate::stats::MonthRow| num(m.loan_rate));
     series!("bond_rate", |m: &crate::stats::MonthRow| num(m.bond_rate));
-    series!("printed", |m: &crate::stats::MonthRow| m.printed.to_string());
-    series!("unhoused", |m: &crate::stats::MonthRow| m.unhoused.to_string());
+    series!("printed", |m: &crate::stats::MonthRow| m
+        .printed
+        .to_string());
+    series!("unhoused", |m: &crate::stats::MonthRow| m
+        .unhoused
+        .to_string());
     series!("homes", |m: &crate::stats::MonthRow| m.homes.to_string());
-    series!("housing_capacity", |m: &crate::stats::MonthRow| m.housing_capacity.to_string());
-    series!("avg_land_value", |m: &crate::stats::MonthRow| m.avg_land_value.to_string());
-    series!("rent_revenue", |m: &crate::stats::MonthRow| m.rent_revenue.to_string());
-    series!("immigrants", |m: &crate::stats::MonthRow| m.immigrants.to_string());
+    series!("housing_capacity", |m: &crate::stats::MonthRow| m
+        .housing_capacity
+        .to_string());
+    series!("avg_land_value", |m: &crate::stats::MonthRow| m
+        .avg_land_value
+        .to_string());
+    series!("rent_revenue", |m: &crate::stats::MonthRow| m
+        .rent_revenue
+        .to_string());
+    series!("immigrants", |m: &crate::stats::MonthRow| m
+        .immigrants
+        .to_string());
     o.push_str("\"approval\":[");
     for (i, (_, a, _)) in approval.iter().enumerate() {
         if i > 0 {
@@ -279,10 +372,22 @@ fn snapshot(w: &World, speed: f64, paused: bool, approval: &[(u32, f64, f64)]) -
         if i > 0 {
             o.push(',');
         }
-        o.push_str(&format!("{{\"day\":{},\"kind\":\"{}\",\"msg\":\"{}\"}}", day, esc(kind), esc(msg)));
+        o.push_str(&format!(
+            "{{\"day\":{},\"kind\":\"{}\",\"msg\":\"{}\"}}",
+            day,
+            esc(kind),
+            esc(msg)
+        ));
     }
     o.push_str("],");
-    o.push_str(&format!("\"parties\":[{}]", PARTIES.iter().map(|(n, p)| format!("[\"{}\",{}]", n, p)).collect::<Vec<_>>().join(",")));
+    o.push_str(&format!(
+        "\"parties\":[{}]",
+        PARTIES
+            .iter()
+            .map(|(n, p)| format!("[\"{}\",{}]", n, p))
+            .collect::<Vec<_>>()
+            .join(",")
+    ));
     o.push('}');
     o
 }
@@ -314,7 +419,10 @@ fn handle(mut stream: TcpStream, shared: Arc<Shared>) {
     let path = parts.next().unwrap_or("/").to_string();
     let mut content_length = 0usize;
     for l in lines {
-        if let Some(v) = l.strip_prefix("Content-Length:").or_else(|| l.strip_prefix("content-length:")) {
+        if let Some(v) = l
+            .strip_prefix("Content-Length:")
+            .or_else(|| l.strip_prefix("content-length:"))
+        {
             content_length = v.trim().parse().unwrap_or(0);
         }
     }
@@ -329,8 +437,14 @@ fn handle(mut stream: TcpStream, shared: Arc<Shared>) {
     let body = String::from_utf8_lossy(&body).to_string();
 
     let (status, ctype, out) = match (method.as_str(), path.as_str()) {
-        ("GET", "/") | ("GET", "/index.html") => ("200 OK", "text/html; charset=utf-8", UI.to_string()),
-        ("GET", "/state") => ("200 OK", "application/json", shared.snapshot.lock().unwrap().clone()),
+        ("GET", "/") | ("GET", "/index.html") => {
+            ("200 OK", "text/html; charset=utf-8", UI.to_string())
+        }
+        ("GET", "/state") => (
+            "200 OK",
+            "application/json",
+            shared.snapshot.lock().unwrap().clone(),
+        ),
         ("POST", "/policy") => {
             let mut c = shared.control.lock().unwrap();
             for kv in body.split('&') {
@@ -357,10 +471,23 @@ fn handle(mut stream: TcpStream, shared: Arc<Shared>) {
                 "play" => c.paused = false,
                 "pause" => c.paused = true,
                 "speed" => {
-                    c.speed = if value == "max" { f64::INFINITY } else { value.parse().unwrap_or(7.0) };
+                    c.speed = if value == "max" {
+                        f64::INFINITY
+                    } else {
+                        value
+                            .parse::<f64>()
+                            .ok()
+                            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 336.0)
+                            .unwrap_or(7.0)
+                    };
                     c.paused = false;
                 }
-                "step" => c.step_days += value.parse::<u32>().unwrap_or(1),
+                "step" => {
+                    c.step_days = c
+                        .step_days
+                        .saturating_add(value.parse::<u32>().unwrap_or(1))
+                        .min(DAYS_PER_YEAR)
+                }
                 _ => {}
             }
             ("200 OK", "application/json", "{\"ok\":true}".to_string())
