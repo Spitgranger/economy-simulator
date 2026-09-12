@@ -75,12 +75,14 @@ wage, public school class size and teacher pay, the surplus rule, the
 central bank's interest rate, a money-printing rate and the ground rent, plus
 one-off print and burn buttons). Apply changes at any time.
 
-The city is a 24 x 16 grid. Pick a tool (residential, business, school,
-park, demolish) and click a tile. At month end, affordable orders reserve their
+The region is a 48 x 32 grid with streets every seven tiles. Homes and firms
+start on mixed central frontage, zoned for the requested population plus 20%
+headroom; distant lots remain available for expansion. Pick a tool (residential,
+business, school, park, road, demolish) and click a tile. At month end, affordable orders reserve their
 budgets in escrow and clear their sites. Construction then buys finite inventory
 and hires a share of existing building-trade labor, reducing ordinary production.
 Projects take at least four construction days; buildings provide no capacity
-until complete. Material, labor, and budget shortages delay progress. Unspent
+until complete. Material, labor, budget, and road-access shortages delay progress. Unspent
 escrow returns to the treasury on completion or cancellation. The browser shows
 project progress, cancellation buttons, command feedback, and a **Save game** button.
 Demolishing an unoccupied lot still completes at month end without construction.
@@ -88,6 +90,26 @@ Demolishing an unoccupied lot still completes at month end without construction.
 For this first resource-planning slice, building materials use existing shelter
 inventory; dedicated material goods and durable housing services are the next
 modeling step. Exhausted project budgets require cancellation and replanning.
+
+Roads cost **$600** and require materials and 15 work units. Roads connect
+orthogonally. Deliveries need a continuous road route from a supplier to a road
+adjacent to the site. Extend roads outward from completed streets; disconnected
+sites report **road access missing**. Already delivered materials remain usable.
+
+Traffic comes from actual activity: two commute trips per employed person per
+day, one trip per home/supplier pair that made a purchase, and one freight trip
+per 50 delivered units (rounded up per delivery). Capacity is 400 trips per road
+tile per day; congestion reduces effective labor and output. Routes refresh
+monthly and after road edits; travel costs use yesterday's flows. People without
+a route walk with an eight-tile penalty; freight requires a route. Deliveries
+complete within the day—vehicles and multi-day haulage are not modeled.
+
+Press **T** in the native client, or use the browser's view selector, to switch
+between city, traffic, and road-adjacency views. Inspect lots for flow/capacity,
+access, and construction stall reasons. Green adjacency does not guarantee a
+route to a particular supplier; the site's access stall checks that route.
+`monthly.csv` includes requested commute/shopping/freight trips, routed and
+off-network totals, peak tile flow, and average delay across used roads.
 
 Homes need residential room (20 per tile),
 firms need business lots (6 per tile), pupils need school room (250 per
@@ -125,8 +147,9 @@ Saves include RNG streams, policy schedules, construction progress and escrow,
 pending commands, agents, financial state, and statistical history. Their version
 and checksum are validated; CSV/event files in the new directory contain the
 continuation, while monthly history and the cumulative output hash are preserved.
-Snapshot format 2 includes the daily physical goods report. Version 1 saves are
-rejected; there is no backward-version migration support.
+Snapshot format **3** includes roads, trips, flows, and monthly route choices.
+Versions 1 and 2 are rejected; there is no backward-version migration support.
+Derived route lookup indexes and search trees are rebuilt on load.
 
 ## Run it headless
 

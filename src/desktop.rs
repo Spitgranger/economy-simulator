@@ -26,6 +26,7 @@ fn zone_color(z: Zone) -> Color {
         Zone::Business => Color::from_hex(0x79b8cd),
         Zone::School => Color::from_hex(0xe6a26a),
         Zone::Park => Color::from_hex(0x64a877),
+        Zone::Road => Color::from_hex(0x505866),
         Zone::Empty => Color::from_hex(0x7d9871),
     }
 }
@@ -36,6 +37,10 @@ fn block(p: Vec3, size: Vec3, c: Color) {
 fn lot(x: f32, z: f32, zone: Zone, occupants: u16) {
     let color = zone_color(zone);
     block(vec3(x, -0.035, z), vec3(0.94, 0.07, 0.94), color);
+    if zone == Zone::Road {
+        draw_cube(vec3(x, 0.02, z), vec3(0.98, 0.04, 0.98), None, color);
+        return;
+    }
     if zone == Zone::Empty {
         return;
     }
@@ -134,9 +139,9 @@ fn city_view_size() -> Vec2 {
         (screen_height() - 144.0).max(1.0),
     )
 }
-fn fitted_distance() -> f32 {
+fn fitted_distance(w: usize, h: usize) -> f32 {
     let size = city_view_size();
-    (26.0 * (1.2 / (size.x / size.y)).max(1.0)).min(120.0)
+    ((w as f32).max(h as f32 * 1.5) * 1.1 * (1.2 / (size.x / size.y)).max(1.0)).min(120.0)
 }
 
 pub async fn run(mut world: World, save: Option<String>) {
@@ -148,8 +153,9 @@ pub async fn run(mut world: World, save: Option<String>) {
     let mut target = vec3(world.city.w as f32 / 2.0, 0.0, world.city.h as f32 / 2.0);
     let mut yaw = 0.75f32;
     let mut pitch = 0.8f32;
-    let mut distance = fitted_distance();
+    let mut distance = fitted_distance(world.city.w, world.city.h);
     let mut last_mouse = Vec2::from(mouse_position());
+    let mut overlay = 0u8; // 0 city, 1 flow/capacity, 2 road access
     let mut tool: Option<Zone> = None;
     let mut paused = true;
     let mut speed = 7.0;
@@ -211,7 +217,7 @@ pub async fn run(mut world: World, save: Option<String>) {
         target.z = target.z.clamp(0.0, world.city.h as f32);
         if is_key_pressed(KeyCode::Home) {
             target = vec3(world.city.w as f32 / 2.0, 0.0, world.city.h as f32 / 2.0);
-            distance = fitted_distance();
+            distance = fitted_distance(world.city.w, world.city.h);
             yaw = 0.75;
             pitch = 0.8;
         }
@@ -332,6 +338,11 @@ pub async fn run(mut world: World, save: Option<String>) {
             for x in 0..world.city.w {
                 let t = &world.city.tiles[y * world.city.w + x];
                 lot(x as f32, y as f32, t.zone, t.occupants);
+                if overlay > 0 {
+                    let idx=y*world.city.w+x;
+                    let color=if overlay==1 {let load=(world.city.traffic.flows[idx] as f32/400.0).min(2.0)/2.0; Color::new(load,1.0-load,0.15,0.8)} else if world.city.road_access(idx as u16) {GREEN} else {RED};
+                    if overlay==2 || t.zone==Zone::Road {draw_cube(vec3(x as f32,0.065,y as f32),vec3(0.92,0.04,0.92),None,color);}
+                }
             }
         }
         for &(x, y, z) in &world.gov.pending_builds {
@@ -415,6 +426,8 @@ pub async fn run(mut world: World, save: Option<String>) {
             WHITE,
         );
         draw_rectangle(0.0, 82.0, 280.0, screen_height() - 82.0, panel);
+        if is_key_pressed(KeyCode::T) { overlay=(overlay+1)%3; }
+        draw_text(["T: City", "T: Traffic green <400, red >=800", "T: Access green adjacent road, red none"][overlay as usize], 295.0, 100.0, 16.0, WHITE);
         draw_text("PLAN YOUR CITY", 20.0, 116.0, 21.0, WHITE);
         for (i, (name, z)) in [
             ("Inspect", None),
@@ -422,13 +435,14 @@ pub async fn run(mut world: World, save: Option<String>) {
             ("Business  /  $2,500", Some(Zone::Business)),
             ("School  /  $4,000", Some(Zone::School)),
             ("Park  /  $800", Some(Zone::Park)),
+            ("Road  /  $600", Some(Zone::Road)),
             ("Demolish  /  $0", Some(Zone::Empty)),
         ]
         .iter()
         .enumerate()
         {
             if button(
-                Rect::new(16.0, 134.0 + i as f32 * 44.0, 248.0, 38.0),
+                Rect::new(16.0, 134.0 + i as f32 * 38.0, 248.0, 32.0),
                 name,
                 tool == *z,
             ) {
@@ -511,6 +525,8 @@ pub async fn run(mut world: World, save: Option<String>) {
                 vec![
                     format!("Lot {x}, {y}: {}", t.zone.name()),
                     format!("Occupancy: {} / {}", t.occupants, t.zone.capacity()),
+                    format!("Road flow: {} / 400", world.city.traffic.flows[world.city.idx(x,y) as usize]),
+                    format!("Road access: {}", world.city.road_access(world.city.idx(x,y))),
                     format!("Land value: ${:.0}", t.land_value as f64 / 100.0),
                 ]
             };

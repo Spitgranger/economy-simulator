@@ -14,6 +14,7 @@ pub enum Zone {
     Business = 2,
     School = 3,
     Park = 4,
+    Road = 5,
 }
 
 impl Zone {
@@ -23,6 +24,7 @@ impl Zone {
             2 => Zone::Business,
             3 => Zone::School,
             4 => Zone::Park,
+            5 => Zone::Road,
             _ => Zone::Empty,
         }
     }
@@ -42,6 +44,7 @@ impl Zone {
             Zone::Business => 250_000,
             Zone::School => 400_000,
             Zone::Park => 80_000,
+            Zone::Road => 60_000,
             Zone::Empty => 0,
         }
     }
@@ -52,6 +55,7 @@ impl Zone {
             Zone::Business => "business",
             Zone::School => "school",
             Zone::Park => "park",
+            Zone::Road => "road",
         }
     }
 }
@@ -71,32 +75,45 @@ pub struct City {
     pub tiles: Vec<Tile>,
     pub rent_month: i64,
     pub built_month: i64,
+    pub traffic: crate::traffic::Traffic,
 }
 
 impl City {
     /// A compact starter city: a business core, a residential ring, one school, two parks.
     pub fn starter(w: usize, h: usize) -> City {
-        let mut c = City { w, h, tiles: vec![Tile { zone: Zone::Empty, occupants: 0, land_value: 100_000 }; w * h], rent_month: 0, built_month: 0 };
-        let (cx, cy) = (w as i32 / 2, h as i32 / 2);
-        for y in 0..h as i32 {
-            for x in 0..w as i32 {
-                let dx = (x - cx).abs();
-                let dy = (y - cy).abs();
-                let zone = if dx <= 3 && dy <= 1 {
-                    Zone::Business
-                } else if dx <= 5 && dy <= 3 {
-                    Zone::Residential
-                } else {
-                    Zone::Empty
-                };
-                c.tiles[(y as usize) * w + x as usize].zone = zone;
+        let mut c = City { w, h, tiles: vec![Tile { zone: Zone::Empty, occupants: 0, land_value: 100_000 }; w * h], rent_month: 0, built_month: 0, traffic: crate::traffic::Traffic::new(w*h) };
+        // Streets at 3 mod 7 leave (0,0) vacant for expansion. Frontage is
+        // occupied first; interiors remain vacant for player development.
+        for y in 0..h {
+            for x in 0..w {
+                let frontage = x % 7 == 2 || x % 7 == 4 || y % 7 == 2 || y % 7 == 4;
+                let zone = if x % 7 == 3 || y % 7 == 3 { Zone::Road }
+                    else if frontage && (x + 2*y) % 4 == 0 { Zone::Business }
+                    else if frontage { Zone::Residential } else { Zone::Empty };
+                c.tiles[y*w+x].zone = zone;
             }
         }
-        c.set(cx as usize + 3, cy as usize - 4, Zone::School);
-        c.set(cx as usize - 3, cy as usize - 4, Zone::Park);
-        c.set(cx as usize, cy as usize + 4, Zone::Park);
+        let school = (0..c.tiles.len()).filter(|&i| c.tiles[i].zone == Zone::Residential)
+            .min_by_key(|&i| c.distance(i as u16, c.idx(w/2,h/2)));
+        if let Some(i) = school { c.tiles[i].zone = Zone::School; }
+        c.set(1, 2, Zone::Park);
         c.update_land_values();
         c
+    }
+
+    /// Zone only enough central frontage for the scenario plus 20% headroom.
+    /// Roads span the region; empty frontage remains available for expansion.
+    pub fn size_starter_neighborhood(&mut self, homes: usize, firms: usize) {
+        let center = self.idx(self.w / 2, self.h / 2);
+        for (zone, count) in [(Zone::Residential, homes), (Zone::Business, firms)] {
+            let cap = zone.capacity() as usize;
+            let needed = (count.saturating_add(count / 5).saturating_add(cap - 1) / cap).max(1);
+            let mut lots: Vec<_> = self.tiles.iter().enumerate()
+                .filter(|(_, tile)| tile.zone == zone).map(|(i, _)| i as u16).collect();
+            lots.sort_unstable_by_key(|&t| (self.distance(center, t), t));
+            for &t in lots.iter().skip(needed) { self.tiles[t as usize].zone = Zone::Empty; }
+        }
+        self.update_land_values();
     }
 
     #[inline]
@@ -111,6 +128,7 @@ impl City {
 
     pub fn set(&mut self, x: usize, y: usize, zone: Zone) {
         if x < self.w && y < self.h {
+            if (self.tiles[y * self.w + x].zone == Zone::Road) != (zone == Zone::Road) { self.traffic.invalidate(); }
             let t = &mut self.tiles[y * self.w + x];
             t.zone = zone;
             t.occupants = 0;
@@ -127,9 +145,21 @@ impl City {
         (ax - bx).abs() + (ay - by).abs()
     }
 
-    /// Share of a worker's output that survives the commute.
+    /// Share of output after travel. Congested road cost has different units
+    /// from the former Manhattan distance; 0.006 is the starter-scenario
+    /// calibration, with the existing 40% lower bound retained.
     pub fn work_factor(&self, home: u16, work: u16) -> f64 {
-        (1.0 - 0.015 * self.distance(home, work) as f64).max(0.4)
+        (1.0 - 0.006 * self.route_cost(home, work)).max(0.4)
+    }
+
+    pub fn ensure_route(&mut self, a: u16, b: u16) -> bool {
+        self.traffic.ensure_route(&self.tiles, self.w, a, b)
+    }
+    pub fn route_cost(&self, a: u16, b: u16) -> f64 {
+        self.traffic.route_cost(a, b).unwrap_or(self.distance(a,b) as f64 + 8.0)
+    }
+    pub fn road_access(&self, tile: u16) -> bool {
+        crate::traffic::entries(&self.tiles, self.w, tile).next().is_some()
     }
 
     /// Nearest tile of `zone` with free room to `near` (or the centre).
@@ -188,6 +218,7 @@ impl City {
                         let d = dx.abs() + dy.abs();
                         let (nz, nocc) = snapshot[(ny as usize) * self.w + nx as usize];
                         match nz {
+                            Zone::Road if d == 1 => v += 8_000.0 / crate::traffic::cross_cost(self.traffic.flows[(ny as usize) * self.w + nx as usize]),
                             Zone::Business if d <= 2 => v += 15_000.0 * (0.5 + nocc),
                             Zone::Park if d <= 2 => v += 20_000.0 / d as f64,
                             Zone::School if d <= 3 => v += 8_000.0,

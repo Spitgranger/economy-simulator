@@ -21,6 +21,8 @@ fn household_purchases_remove_stock_and_pay_suppliers_and_tax() {
     let mut scenario = Scenario::new();
     let w = &mut scenario.world;
     w.gov.policy.sales_tax = [0.2; NG];
+    w.ppl.employer.fill(econsim::people::NO_FIRM);
+    for staff in &mut w.firms.employees { staff.clear(); }
     w.firms.effective_labor.fill(0.0);
     w.firms.production_carry.fill(0.0);
     for &f in &w.firms.active_list {
@@ -71,6 +73,8 @@ fn cash_cannot_replace_missing_labor_and_fractional_output_carries_forward() {
         w.ledger.transfer(account, w.gov.account, amount, w.day);
     }
     w.firms.inventory.fill(0);
+    w.ppl.employer.fill(econsim::people::NO_FIRM);
+    for staff in &mut w.firms.employees { staff.clear(); }
     w.firms.effective_labor.fill(0.0);
     w.firms.production_carry.fill(0.0);
     let f = *w.firms.active_list.iter().find(|&&f| w.firms.good[f as usize] as usize == FOOD).unwrap() as usize;
@@ -78,7 +82,14 @@ fn cash_cannot_replace_missing_labor_and_fractional_output_carries_forward() {
     w.tick_day();
     assert_eq!(w.firms.inventory[f], 0);
     w.firms.productivity[f] = 1.0;
-    w.firms.effective_labor[f] = 0.5;
+    let worker = (0..w.ppl.n).find(|&i| w.ppl.is_worker(i)).unwrap();
+    w.ppl.employer[worker] = f as u32;
+    w.firms.employees[f].push(worker as u32);
+    // Keep this production test independent of yesterday's commuter congestion.
+    w.homes.tile[w.ppl.home[worker] as usize] = econsim::city::NO_TILE;
+    let home = w.homes.tile[w.ppl.home[worker] as usize];
+    w.city.ensure_route(home, w.firms.tile[f]);
+    w.ppl.skill[worker] = 0.5 / w.city.work_factor(home, w.firms.tile[f]);
     w.tick_day();
     assert_eq!(w.firms.inventory[f], 0);
     w.tick_day();

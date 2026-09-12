@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 const MAGIC: &[u8; 8] = b"ECONSAVE";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 fn checksum(bytes: &[u8]) -> u64 {
@@ -85,6 +85,7 @@ impl World {
             return Err(invalid("snapshot checksum mismatch"));
         }
         let mut world: Self = codec().deserialize(&bytes[20..]).map_err(invalid)?;
+        world.city.traffic.rebuild_caches();
         let out_dir = out_dir.as_ref();
         let output = out_dir
             .to_str()
@@ -133,6 +134,9 @@ mod tests {
         let mut original = World::new(cfg).unwrap();
         for _ in 0..35 {
             original.tick_day();
+        }
+        for x in 0..3 {
+            original.city.set(x, 1, crate::city::Zone::Road);
         }
         let tile = original
             .city
@@ -207,6 +211,67 @@ mod tests {
         drop(resumed);
         fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn traffic_snapshot_preserves_assignment_across_topology_and_month_boundary() {
+        use crate::{city::Zone, traffic::TripKind};
+        let dir = directory();
+        let mut original = World::new(Config {
+            n_hh: 40,
+            n_firms: 10,
+            quiet: true,
+            out_dir: dir.join("original").to_str().unwrap().into(),
+            ..Config::default()
+        })
+        .unwrap();
+        for _ in 0..27 {
+            original.tick_day();
+        }
+        // Warm the derived caches and establish a frozen monthly route, then
+        // invalidate between ticks as a player demolition would.
+        let a = original.city.idx(3, 0);
+        let b = original.city.idx(3, 6);
+        original.city.ensure_route(a, b);
+        original.city.traffic.add_trip(a, b, TripKind::Freight, 7);
+        original.city.set(3, 2, Zone::Empty);
+        let path = dir.join("traffic.save");
+        original.save(&path).unwrap();
+        // The dense tile-pair accelerator alone would exceed nine megabytes.
+        assert!(fs::metadata(&path).unwrap().len() < 4_000_000);
+        let mut resumed = World::load(&path, dir.join("resumed")).unwrap();
+        for day in 0..35 {
+            if day == 3 {
+                original.city.set(3, 2, Zone::Road);
+                resumed.city.set(3, 2, Zone::Road);
+            }
+            original.tick_day();
+            resumed.tick_day();
+            assert_eq!(original.city.traffic.daily, resumed.city.traffic.daily);
+            assert_eq!(original.city.traffic.flows, resumed.city.traffic.flows);
+        }
+        resumed.cfg.out_dir = original.cfg.out_dir.clone();
+        assert_eq!(
+            codec().serialize(&original).unwrap(),
+            codec().serialize(&resumed).unwrap()
+        );
+        // A second snapshot with live, frozen paths exercises reconstruction of
+        // pair lookups without throwing those paths away.
+        original.save(&path).unwrap();
+        let mut again = World::load(&path, dir.join("again")).unwrap();
+        for _ in 0..30 {
+            original.tick_day();
+            again.tick_day();
+        }
+        again.cfg.out_dir = original.cfg.out_dir.clone();
+        assert_eq!(
+            codec().serialize(&original).unwrap(),
+            codec().serialize(&again).unwrap()
+        );
+        drop(original);
+        drop(resumed);
+        drop(again);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn opposition_snapshot_preserves_platform_authority_and_live_world_on_failure() {
         use crate::commands::Command;

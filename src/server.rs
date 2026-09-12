@@ -62,7 +62,7 @@ fn parse_command(k: &str, v: &str) -> Result<Command, String> {
             let x = parts[0].parse().map_err(|_| "invalid x")?;
             let y = parts[1].parse().map_err(|_| "invalid y")?;
             let z: u8 = parts[2].parse().map_err(|_| "invalid zone")?;
-            if z > 4 {
+            if z > 5 {
                 return Err("invalid zone".into());
             }
             Ok(Command::Build {
@@ -262,7 +262,7 @@ fn snapshot(
         ));
     }
     o.push_str(&format!(
-        "],\"costs\":[0,{},{},{},{}],\"capacity\":[0,{},{},{},0]}},",
+        "],\"costs\":[0,{},{},{},{},60000],\"capacity\":[0,{},{},{},0,0]}},",
         crate::city::Zone::Residential.cost(),
         crate::city::Zone::Business.cost(),
         crate::city::Zone::School.cost(),
@@ -271,6 +271,7 @@ fn snapshot(
         crate::city::Zone::Business.capacity(),
         crate::city::Zone::School.capacity()
     ));
+    o.push_str(&format!("\"traffic\":{{\"capacity\":400,\"flows\":{:?},\"access\":{:?},\"requested\":{:?},\"routed\":{:?},\"off_network\":{:?}}},", w.city.traffic.flows, (0..w.city.tiles.len()).map(|t|w.city.road_access(t as u16)).collect::<Vec<_>>(), w.city.traffic.daily.requested, w.city.traffic.daily.routed, w.city.traffic.daily.off_network));
     o.push_str("\"projects\":[");
     for (i, p) in w.construction.iter().enumerate() {
         if i > 0 {

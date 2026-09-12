@@ -212,9 +212,10 @@ impl World {
         firms.public[school] = true;
         firms.holders[school].clear();
         firms.shares[school] = 0;
-        let mut city = City::starter(24, 16);
+        let mut city = City::starter(48, 32);
+        city.size_starter_neighborhood(cfg.n_hh, cfg.n_firms);
         for f in 0..cfg.n_firms {
-            let t = city.find_free(Zone::Business, NO_TILE).expect("starter city has room for the first firms");
+            let t = city.find_free(Zone::Business, NO_TILE).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "requested firms exceed starter business capacity"))?;
             city.occupy(t);
             firms.tile[f] = t;
         }
@@ -423,6 +424,7 @@ impl World {
         self.day_unmet = 0;
         self.day_output = 0;
 
+        self.traffic_begin_day();
         self.construction_day();
         self.produce();
         self.consume();
@@ -432,6 +434,7 @@ impl World {
                 self.stock_session();
             }
         }
+        self.traffic_finish_day();
         if self.day % DAYS_PER_MONTH == 0 {
             self.month_end();
         }
@@ -617,6 +620,7 @@ impl World {
                     let affordable = cash / gross;
                     let buy = desired.min(self.firms.inventory[fi]).min(affordable);
                     if buy > 0 {
+                        self.city.traffic.shopping_pairs.push((h as u32, fi as u32));
                         let net = buy * (gross - tax);
                         self.ledger.transfer(acc, self.firms.account[fi], net, self.day);
                         if tax > 0 {
@@ -1803,6 +1807,13 @@ impl World {
             built: self.city.built_month,
             avg_commute: self.month_commute_sum,
             immigrants: self.month_immigrants,
+            traffic_commute: self.city.traffic.monthly.requested[0],
+            traffic_shopping: self.city.traffic.monthly.requested[1],
+            traffic_freight: self.city.traffic.monthly.requested[2],
+            traffic_routed: self.city.traffic.monthly.routed.iter().sum(),
+            traffic_off_network: self.city.traffic.monthly.off_network.iter().sum(),
+            traffic_peak_flow: self.city.traffic.monthly_peak_flow,
+            traffic_mean_delay: self.city.traffic.monthly_delay_sum / self.city.traffic.monthly_days.max(1) as f64,
         };
         self.city.built_month = 0;
         if !self.cfg.quiet && month % MONTHS_PER_YEAR == 0 {
@@ -1830,6 +1841,7 @@ impl World {
         self.month_unions = 0;
         self.month_separations = 0;
         self.month_immigrants = 0;
+        self.city.traffic.reset_month();
         self.month_hc_sum = 0.0;
         self.month_tuition = 0;
     }
@@ -1852,6 +1864,7 @@ mod construction_production_tests {
             w.firms.effective_labor[f] = 8.0;
             w.firms.production_carry[f] = 0.0;
         }
+        for x in 0..3 { w.city.set(x, 1, Zone::Road); }
         w.start_construction(0, 0, Zone::Residential).unwrap();
         w.construction_day();
         let before = w.firms.inventory.clone();
